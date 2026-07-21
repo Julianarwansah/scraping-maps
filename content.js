@@ -438,21 +438,29 @@
   }
 
   function extractPanelName(panel) {
-    // Try multiple selectors for business name
-    const name = txt(
-      panel.querySelector('[class*="DUwDvf"]'),
+    // Try multiple selectors for business name - Google Maps uses h1 for business name
+    const candidates = [
       panel.querySelector('h1'),
+      panel.querySelector('[class*="DUwDvf"]'),
       panel.querySelector('[data-attrid="title"]'),
       panel.querySelector('.qUyWKc'),
       panel.querySelector('.Io6YTe'),
-      panel.querySelector('.qUyWKc span'),
-      panel.querySelector('[role="heading"]')
-    );
-    // Filter out invalid names
-    if (name && name.length > 1 && name.toLowerCase() !== 'hasil' && name.toLowerCase() !== 'result') {
-      return name;
+      panel.querySelector('[role="heading"][aria-level="1"]'),
+    ];
+    for (const el of candidates) {
+      if (!el) continue;
+      const t = el.textContent?.trim() || '';
+      // Filter out invalid names
+      if (t && t.length > 1 &&
+          t.toLowerCase() !== 'hasil' &&
+          t.toLowerCase() !== 'result' &&
+          t.toLowerCase() !== 'ringkasan' &&
+          t.toLowerCase() !== 'ulasan' &&
+          t.toLowerCase() !== 'tentang') {
+        return t;
+      }
     }
-    return name || '';
+    return '';
   }
 
   // ============================================================
@@ -487,8 +495,10 @@
         d.phone = cleanPhone(el, al, tx);
       }
       // ADDRESS
-      if (!d.address && (matchKw(al, L.address) || did.includes('address') || did.includes('loc'))) {
-        d.address = cleanLabel(al, L.address) || tx;
+      if (!d.address && (matchKw(al, L.address) || did.includes('address') || did.includes('loc') || did.includes('addr'))) {
+        // Get the actual address text, not just the aria-label
+        const addrText = el.querySelector('div[data-item-id]')?.textContent?.trim() || tx;
+        d.address = cleanLabel(al, L.address) || addrText;
       }
       // WEBSITE
       if (!d.website && (matchKw(al, L.website) || did.includes('website') || did === 'url')) {
@@ -540,6 +550,24 @@
                   panel.querySelector('[data-attrid="category"]');
     d.category = txt(catEl);
 
+    // Category fallback: look for text near rating
+    if (!d.category) {
+      const ratingEl = panel.querySelector('span[role="img"]');
+      if (ratingEl) {
+        const parent = ratingEl.parentElement;
+        if (parent) {
+          const spans = parent.querySelectorAll('span');
+          for (const sp of spans) {
+            const t = sp.textContent?.trim() || '';
+            if (t.length > 3 && t.length < 50 && !t.includes('(') && !/^\d/.test(t)) {
+              d.category = t;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     // ── Website fallback: scan only links with aria-label (not all links) ──
     if (!d.website) {
       const labeledLinks = panel.querySelectorAll('a[aria-label]');
@@ -560,6 +588,25 @@
       const hoursSection = panel.querySelector('[aria-label*="Jam"], [aria-label*="jam"], [data-item-id="oh"]');
       if (hoursSection) {
         d.hours = hoursSection.getAttribute('aria-label') || hoursSection.textContent?.trim() || '';
+      }
+    }
+
+    // ── Address fallback: scan buttons with address-like content ──
+    if (!d.address) {
+      const buttons = panel.querySelectorAll('button, [role="link"]');
+      for (const btn of buttons) {
+        const btnText = btn.textContent?.trim() || '';
+        const btnAl = (btn.getAttribute('aria-label') || '').toLowerCase();
+        // Address patterns: contains street indicators
+        if ((btnText.length > 15 && (
+            btnText.includes('Jl.') || btnText.includes('Jalan') ||
+            btnText.includes('No.') || btnText.includes('Kec.') ||
+            btnText.includes('Kota') || btnText.includes('Kab.') ||
+            btnText.includes('Indonesia') || btnText.includes(',')
+          )) || btnAl.includes('alamat') || btnAl.includes('address')) {
+          d.address = btnText;
+          break;
+        }
       }
     }
 
