@@ -276,14 +276,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     resetBtn(btn);
 
     if (msg.results?.length > 0) {
-      const warnText = msg.warning ? ` ${msg.warning}` : '';
-      stat.textContent = `✅ ${msg.results.length} data ditemukan! Exporting...${warnText}`;
+      // Deduplicate results
+      const deduped = deduplicate(msg.results);
+      const removed = msg.results.length - deduped.length;
+
+      let statusMsg = `✅ ${deduped.length} data ditemukan!`;
+      if (removed > 0) statusMsg += ` (${removed} duplikat dihapus)`;
+      if (msg.warning) statusMsg += ` ${msg.warning}`;
+      stat.textContent = statusMsg;
       stat.style.color = msg.warning ? 'var(--warning)' : 'var(--success)';
 
-      chrome.storage.local.set({ lastResults: msg.results, lastTime: Date.now() });
-      saveToHistory(msg.query || 'Scrape', msg.results);
+      chrome.storage.local.set({ lastResults: deduped, lastTime: Date.now() });
+      saveToHistory(msg.query || 'Scrape', deduped);
 
-      setTimeout(() => exportData(msg.results), 150);
+      setTimeout(() => exportData(deduped), 150);
     } else {
       stat.textContent = '⚠️ Tidak ada hasil. Coba keyword lain.';
       stat.style.color = 'var(--warning)';
@@ -325,7 +331,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 function deduplicate(results) {
   const seen = new Map();
   return results.filter(r => {
-    const key = ((r.name || '') + '|' + (r.address || '')).toLowerCase().trim();
+    // Primary key: name + address
+    let key = ((r.name || '') + '|' + (r.address || '')).toLowerCase().trim();
+    // If name is empty or same as address, use URL as key
+    if (!r.name || r.name === r.address) {
+      key = (r.googleMapsUrl || r.website || '').toLowerCase().trim();
+    }
+    if (!key) return true; // Keep entries with no identifiable key
     if (seen.has(key)) return false;
     seen.set(key, true);
     return true;

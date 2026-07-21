@@ -438,14 +438,21 @@
   }
 
   function extractPanelName(panel) {
-    return txt(
+    // Try multiple selectors for business name
+    const name = txt(
       panel.querySelector('[class*="DUwDvf"]'),
       panel.querySelector('h1'),
       panel.querySelector('[data-attrid="title"]'),
       panel.querySelector('.qUyWKc'),
       panel.querySelector('.Io6YTe'),
-      panel.querySelector('.qUyWKc span')
+      panel.querySelector('.qUyWKc span'),
+      panel.querySelector('[role="heading"]')
     );
+    // Filter out invalid names
+    if (name && name.length > 1 && name.toLowerCase() !== 'hasil' && name.toLowerCase() !== 'result') {
+      return name;
+    }
+    return name || '';
   }
 
   // ============================================================
@@ -570,18 +577,27 @@
       }
     }
 
-    // ── Phone fallback: scan buttons with aria-label only ──
+    // ── Phone fallback: scan ALL elements with phone patterns ──
     if (!d.phone) {
-      const phoneTargets = panel.querySelectorAll('button[aria-label], [role="link"][aria-label]');
+      // Try buttons and links first
+      const phoneTargets = panel.querySelectorAll('button, [role="link"], a, div[data-item-id], span[data-item-id]');
       for (const el of phoneTargets) {
-        const al = (el.getAttribute('aria-label') || '').toLowerCase();
         const tx = el.textContent?.trim() || '';
-        const combined = al + ' ' + tx;
-        const phoneMatch = combined.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
+        const al = (el.getAttribute('aria-label') || '') + ' ' + tx;
+        // Match Indonesian phone: 08xx-xxxx-xxxx or +62xxx
+        const phoneMatch = al.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
         if (phoneMatch) {
           d.phone = phoneMatch[1].trim();
           break;
         }
+      }
+    }
+    // Last resort: scan ALL text in panel for phone pattern
+    if (!d.phone) {
+      const allText = panel.innerText || '';
+      const phoneMatch = allText.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
+      if (phoneMatch) {
+        d.phone = phoneMatch[1].trim();
       }
     }
 
