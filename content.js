@@ -674,8 +674,35 @@
   function log(msg) { console.log('[MapsScraper] ' + msg); }
 
   function notify(results, warning) {
-    chrome.runtime.sendMessage({ action: 'scrapeResults', results, query: window.__msQuery || '', warning: warning || '' })
-      .catch(e => log('notify failed: ' + e.message));
+    const query = window.__msQuery || '';
+
+    // ALWAYS save to chrome.storage directly (most reliable)
+    chrome.storage.local.set({
+      lastResults: results,
+      lastTime: Date.now()
+    });
+
+    // Save to history directly
+    chrome.storage.local.get(['scrapeHistory'], d => {
+      const history = d.scrapeHistory || [];
+      const storedResults = results.length > 50 ? results.slice(0, 50) : results;
+      history.unshift({
+        id: Date.now(),
+        query: query,
+        count: results.length,
+        timestamp: Date.now(),
+        results: storedResults,
+        truncated: results.length > 50
+      });
+      if (history.length > 10) history.length = 10;
+      chrome.storage.local.set({ scrapeHistory: history });
+    });
+
+    log('Saved ' + results.length + ' results to storage + history');
+
+    // Also try to send to background (for popup live update)
+    chrome.runtime.sendMessage({ action: 'scrapeResults', results, query, warning: warning || '' })
+      .catch(e => log('Background notify failed (non-critical): ' + e.message));
   }
 
   function fail(msg) {
@@ -708,11 +735,14 @@
   function removeOverlay() {
     const el = document.getElementById('__ms_v3');
     if (el) {
-      el.textContent = '✓ Selesai! Data sudah dikirim.';
       el.style.background = 'linear-gradient(135deg,#34a853,#1b7a3d)';
-      el.style.transition = 'opacity .5s';
-      setTimeout(() => { el.style.opacity = '0'; }, 2500);
-      setTimeout(() => { el.remove(); }, 3200);
+      el.style.pointerEvents = 'auto';
+      el.style.cursor = 'pointer';
+      el.innerHTML = '✅ <b>Selesai!</b> Buka popup extension untuk export data.';
+      el.title = 'Klik icon extension di toolbar untuk export';
+      // Don't auto-remove — let user see the message
+      setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 1s'; }, 10000);
+      setTimeout(() => { el.remove(); }, 11500);
     }
   }
 
