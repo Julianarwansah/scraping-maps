@@ -283,13 +283,19 @@ function setupTabListener(tabId, searchQuery, speed) {
           action: 'startScraping',
           query: searchQuery,
           speed: speed
-        }).then(() => {
-          console.log('[BG] Sent startScraping to tab', tabId);
+        }).then(res => {
+          console.log('[BG] Sent startScraping to tab', tabId, res);
+          if (res?.status === 'error') {
+            console.warn('[BG] Content script reported error:', res.error);
+          }
         }).catch(err => {
-          console.error('[BG] Failed to send startScraping:', err);
+          console.error('[BG] Failed to send startScraping, injecting content script...', err);
           chrome.scripting.executeScript({
             target: { tabId },
             files: ['content.js']
+          }).then(() => {
+            // Wait a bit for content script to initialize
+            return new Promise(r => setTimeout(r, 500));
           }).then(() => {
             return chrome.tabs.sendMessage(tabId, {
               action: 'startScraping',
@@ -299,23 +305,26 @@ function setupTabListener(tabId, searchQuery, speed) {
           }).catch(e => {
             console.error('[BG] Manual injection also failed:', e);
             activeSessions.delete('current');
+            setBadge('!', '#d93025');
           });
         });
       };
 
-      setTimeout(sendStart, 2000);
+      // Wait longer for Google Maps to fully load
+      setTimeout(sendStart, 3000);
     }
   };
 
   chrome.tabs.onUpdated.addListener(listener);
 
-  // Safety timeout: remove listener after 60s
+  // Safety timeout: remove listener after 120s (Google Maps can be slow)
   setTimeout(() => {
     if (!listenerRemoved) {
       listenerRemoved = true;
       chrome.tabs.onUpdated.removeListener(listener);
       console.warn('[BG] Tab listener timed out for tab', tabId);
       activeSessions.delete('current');
+      clearBadge();
     }
-  }, 60000);
+  }, 120000);
 }

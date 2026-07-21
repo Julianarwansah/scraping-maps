@@ -352,8 +352,9 @@ function exportCSV(results) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 
-  stat.textContent = `✅ Exported ${results.length} data ke CSV!`;
-  stat.style.color = 'var(--success)';
+  const csvStat = document.getElementById('status');
+  csvStat.textContent = `✅ Exported ${results.length} data ke CSV!`;
+  csvStat.style.color = 'var(--success)';
 }
 
 function csvEscape(val) {

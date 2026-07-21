@@ -6,19 +6,21 @@
 // ============================================================
 
 (() => {
-  if (window.__mapsScraperV3) return;
-  window.__mapsScraperV3 = true;
+  // Remove old listener if re-injected (prevents duplicate listeners)
+  if (window.__msListener) {
+    chrome.runtime.onMessage.removeListener(window.__msListener);
+  }
 
   // ── Config ──────────────────────────────────────────────────
   const BASE_CFG = {
-    MAX_RETRIES:       15,
-    RETRY_DELAY:       2000,
+    MAX_RETRIES:       20,
+    RETRY_DELAY:       1500,
     CLICK_SETTLE:      4500,
-    PANEL_POLL:        500,
-    PANEL_TIMEOUT:     10000,
-    SCROLL_PAUSE:      1200,
+    PANEL_POLL:        200,
+    PANEL_TIMEOUT:     15000,
+    SCROLL_PAUSE:      1000,
     BETWEEN_ITEMS:     1500,
-    MAX_SCROLLS:       30,
+    MAX_SCROLLS:       50,
     SCROLL_STABLE:     3,
   };
   // Clone so speed presets don't mutate the original
@@ -40,28 +42,34 @@
 
   // ── Speed presets ──────────────────────────────────────────
   const SPEED_PRESETS = {
-    slow:       { CLICK_SETTLE: 6000, BETWEEN_ITEMS: 2500, SCROLL_PAUSE: 1800 },
-    normal:     { CLICK_SETTLE: 4500, BETWEEN_ITEMS: 1500, SCROLL_PAUSE: 1200 },
-    fast:       { CLICK_SETTLE: 3000, BETWEEN_ITEMS: 800,  SCROLL_PAUSE: 800  },
-    aggressive: { CLICK_SETTLE: 2000, BETWEEN_ITEMS: 500,  SCROLL_PAUSE: 500  },
+    slow:       { CLICK_SETTLE: 6000, BETWEEN_ITEMS: 2500, SCROLL_PAUSE: 1800, PANEL_POLL: 300 },
+    normal:     { CLICK_SETTLE: 4500, BETWEEN_ITEMS: 1500, SCROLL_PAUSE: 1000, PANEL_POLL: 200 },
+    fast:       { CLICK_SETTLE: 3500, BETWEEN_ITEMS: 1000, SCROLL_PAUSE: 700,  PANEL_POLL: 150 },
+    aggressive: { CLICK_SETTLE: 2500, BETWEEN_ITEMS: 600,  SCROLL_PAUSE: 500,  PANEL_POLL: 100 },
   };
 
   // ── State ───────────────────────────────────────────────────
   let running = false;
 
-  chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
-    if (msg.action === 'startScraping' && !running) {
+  function messageHandler(msg, _sender, reply) {
+    if (msg.action === 'startScraping') {
+      if (running) {
+        reply({ status: 'error', error: 'Scraping already in progress' });
+        return false;
+      }
       running = true;
       window.__msQuery = msg.query || '';
-      // Create fresh CFG from base + speed preset (don't mutate BASE_CFG)
       const speed = msg.speed || 'normal';
       const preset = SPEED_PRESETS[speed] || SPEED_PRESETS.normal;
       CFG = { ...BASE_CFG, ...preset };
       reply({ status: 'started' });
       setTimeout(() => main(msg.query || ''), 1500);
     }
-    return true;
-  });
+    return false;
+  }
+
+  chrome.runtime.onMessage.addListener(messageHandler);
+  window.__msListener = messageHandler;
 
   // ============================================================
   //  MAIN ORCHESTRATOR
@@ -183,20 +191,28 @@
   }
 
   function queryCards(feed) {
+    // Try multiple selectors to find result cards
     const selectors = [
+      'div[data-index]',
+      'div[jsaction*="mouseover"]',
+      'div[role="article"]',
+      'a[href*="/maps/place"]',
       ':scope > div > div > div[data-index]',
       ':scope > div > div[jsaction*="mouseover"]',
       ':scope > div > div > div[role="article"]',
       ':scope > div > div > a[href*="/maps/place"]',
     ];
     for (const sel of selectors) {
-      const items = feed.querySelectorAll(sel);
-      if (items.length > 0) return Array.from(items);
+      try {
+        const items = feed.querySelectorAll(sel);
+        if (items.length > 0) return Array.from(items);
+      } catch (e) { /* invalid selector, skip */ }
     }
-    const all = feed.querySelectorAll(':scope > div > div > div');
+    // Broadest fallback: any child with a link
+    const all = feed.querySelectorAll('*');
     return Array.from(all).filter(el =>
       el.querySelector('a[href*="/maps/place"], a[data-item-id], [role="article"], [role="link"]')
-    );
+    ).slice(0, 100); // Cap to prevent performance issues
   }
 
   function cardId(card) {
