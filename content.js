@@ -464,13 +464,16 @@
   }
 
   // ============================================================
-  //  DETAIL PANEL — OPTIMIZED EXTRACTION
+  //  DETAIL PANEL — AGGRESSIVE EXTRACTION
   // ============================================================
   function extractAll(panel) {
     const d = emptyData();
 
     d.name = extractPanelName(panel);
     if (!d.name) return d;
+
+    // ── Get ALL text from panel for scanning ──
+    const allText = panel.innerText || '';
 
     // ── Rating ──
     const starImg = panel.querySelector('span[role="img"]');
@@ -482,169 +485,98 @@
       if (m) d.rating = m[1].replace(',', '.');
     }
 
-    // ── OPTIMIZED: Single-pass scan of aria-label and data-item-id elements ──
-    // Instead of separate queries for each field, scan once and collect all
-    const ariaElements = panel.querySelectorAll('[aria-label], [data-item-id]');
-    for (const el of ariaElements) {
-      const al  = (el.getAttribute('aria-label') || '').toLowerCase();
-      const did = (el.getAttribute('data-item-id') || '').toLowerCase();
-      const tx  = el.textContent?.trim() || '';
-
-      // PHONE
-      if (!d.phone && (matchKw(al, L.phone) || did.includes('phone') || did.includes('telp'))) {
-        d.phone = cleanPhone(el, al, tx);
-      }
-      // ADDRESS
-      if (!d.address && (matchKw(al, L.address) || did.includes('address') || did.includes('loc') || did.includes('addr'))) {
-        // Get the actual address text, not just the aria-label
-        const addrText = el.querySelector('div[data-item-id]')?.textContent?.trim() || tx;
-        d.address = cleanLabel(al, L.address) || addrText;
-      }
-      // WEBSITE
-      if (!d.website && (matchKw(al, L.website) || did.includes('website') || did === 'url')) {
-        const a = el.querySelector('a[href]');
-        d.website = a?.getAttribute('href') || tx;
-      }
-      // HOURS
-      if (!d.hours && (matchKw(al, L.hours) || did.includes('oh') || did.includes('hours'))) {
-        d.hours = cleanLabel(al, L.hours) || tx;
-      }
-      // PLUS CODE
-      if (!d.plusCode && (did.includes('plus_code') || did.includes('pluscode') || al.includes('plus code'))) {
-        d.plusCode = tx;
-      }
-      // PRICE LEVEL
-      if (!d.priceLevel && (matchKw(al, L.price) || did.includes('price'))) {
-        d.priceLevel = tx || cleanLabel(al, L.price);
-      }
-      // SERVICES
-      if (!d.hasDelivery && (matchKw(al, L.delivery) || did.includes('delivery'))) {
-        d.hasDelivery = true;
-      }
-      if (!d.hasTakeout && (matchKw(al, L.takeout) || did.includes('takeout'))) {
-        d.hasTakeout = true;
-      }
-      if (!d.hasDineIn && (matchKw(al, L.dinein) || did.includes('dine-in'))) {
-        d.hasDineIn = true;
-      }
-
-      // Early exit: if we have all common fields, stop scanning
-      if (d.phone && d.address && d.website && d.hours) break;
-    }
-
-    // ── Reviews: targeted scan only spans with aria-label ──
+    // ── Reviews: scan all spans with aria-label containing numbers ──
     if (!d.reviews) {
-      const reviewSpans = panel.querySelectorAll('span[aria-label]');
-      for (const sp of reviewSpans) {
+      const allSpans = panel.querySelectorAll('span[aria-label]');
+      for (const sp of allSpans) {
         const al = (sp.getAttribute('aria-label') || '').toLowerCase();
-        if (matchKw(al, L.reviews)) {
+        // Match "136 ulasan" or "(136)" patterns
+        if (al.includes('ulasan') || al.includes('review')) {
           const m = al.match(/([\d.,]+)/);
           if (m) { d.reviews = m[1].replace(/[.,]/g, ''); break; }
         }
       }
     }
+    // Reviews fallback: scan text for "(123)" pattern near rating
+    if (!d.reviews) {
+      const m = allText.match(/\((\d[\d.,]*)\)/);
+      if (m) d.reviews = m[1].replace(/[.,]/g, '');
+    }
 
-    // ── Category ──
-    const catEl = panel.querySelector('button[jsaction*="category"]') ||
-                  panel.querySelector('.DkEaL') ||
-                  panel.querySelector('[data-attrid="category"]');
-    d.category = txt(catEl);
-
-    // Category fallback: look for text near rating
+    // ── Category: scan near rating area ──
     if (!d.category) {
-      const ratingEl = panel.querySelector('span[role="img"]');
-      if (ratingEl) {
-        const parent = ratingEl.parentElement;
-        if (parent) {
-          const spans = parent.querySelectorAll('span');
-          for (const sp of spans) {
-            const t = sp.textContent?.trim() || '';
-            if (t.length > 3 && t.length < 50 && !t.includes('(') && !/^\d/.test(t)) {
-              d.category = t;
-              break;
-            }
-          }
+      // Look for text that looks like a category (short, no numbers, near rating)
+      const catPatterns = allText.match(/(?:·\s*)([A-Z][a-zA-Z\s]{3,40})/);
+      if (catPatterns) d.category = catPatterns[1].trim();
+    }
+
+    // ── PHONE: scan ALL buttons and text for phone patterns ──
+    if (!d.phone) {
+      // Method 1: scan all buttons/links with aria-label
+      const phoneEls = panel.querySelectorAll('button, [role="link"], a, [data-item-id]');
+      for (const el of phoneEls) {
+        const al = (el.getAttribute('aria-label') || '').toLowerCase();
+        const tx = el.textContent?.trim() || '';
+        const combined = al + ' ' + tx;
+        const m = combined.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
+        if (m) { d.phone = m[1].trim(); break; }
+      }
+    }
+    if (!d.phone) {
+      // Method 2: scan entire panel text
+      const m = allText.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
+      if (m) d.phone = m[1].trim();
+    }
+
+    // ── ADDRESS: scan ALL buttons/links for address content ──
+    if (!d.address) {
+      const addrEls = panel.querySelectorAll('button, [role="link"], [data-item-id]');
+      for (const el of addrEls) {
+        const tx = el.textContent?.trim() || '';
+        const al = (el.getAttribute('aria-label') || '').toLowerCase();
+        // Match address patterns
+        if (tx.length > 15 && (
+            tx.includes('Jl.') || tx.includes('Jalan') || tx.includes('No.') ||
+            tx.includes('Kec.') || tx.includes('Kota') || tx.includes('Kab.') ||
+            tx.includes('Indonesia') || tx.includes('Banten') || tx.includes('Jakarta') ||
+            (tx.includes(',') && tx.includes(' '))
+          )) {
+          d.address = tx;
+          break;
+        }
+        // Also check aria-label
+        if (al.includes('alamat') || al.includes('address')) {
+          d.address = tx || al;
+          break;
         }
       }
     }
+    // Address fallback: scan text for address-like content
+    if (!d.address) {
+      const addrMatch = allText.match(/((?:Jl\.|Jalan|Jl\.|Jl|Jalan Raya)[\s\S]{10,120})/);
+      if (addrMatch) d.address = addrMatch[1].trim().replace(/\n/g, ' ');
+    }
 
-    // ── Website fallback: scan only links with aria-label (not all links) ──
+    // ── HOURS: scan for time patterns ──
+    if (!d.hours) {
+      const hoursMatch = allText.match(/(Buka[\s\S]{0,30}pukul[\s\S]{0,20}|Tutup[\s\S]{0,30}pukul[\s\S]{0,20}|Jam[\s\S]{0,30})/i);
+      if (hoursMatch) d.hours = hoursMatch[1].trim().replace(/\n/g, ' ');
+    }
+    if (!d.hours) {
+      const hoursMatch2 = allText.match(/(\d{1,2}\.\d{2}\s*[-–]\s*\d{1,2}\.\d{2})/);
+      if (hoursMatch2) d.hours = hoursMatch2[1];
+    }
+
+    // ── WEBSITE: scan for http links ──
     if (!d.website) {
-      const labeledLinks = panel.querySelectorAll('a[aria-label]');
-      for (const a of labeledLinks) {
-        const al = (a.getAttribute('aria-label') || '').toLowerCase();
+      const links = panel.querySelectorAll('a[href]');
+      for (const a of links) {
         const href = a.getAttribute('href') || '';
-        if ((matchKw(al, L.website) || al.includes('buka'))
-            && href.startsWith('http')
-            && !href.includes('google') && !href.includes('gstatic')) {
+        const al = (a.getAttribute('aria-label') || '').toLowerCase();
+        if (href.startsWith('http') && !href.includes('google') && !href.includes('gstatic') && !href.includes('googleapis')) {
           d.website = href;
           break;
         }
-      }
-    }
-
-    // ── Hours fallback ──
-    if (!d.hours) {
-      const hoursSection = panel.querySelector('[aria-label*="Jam"], [aria-label*="jam"], [data-item-id="oh"]');
-      if (hoursSection) {
-        d.hours = hoursSection.getAttribute('aria-label') || hoursSection.textContent?.trim() || '';
-      }
-    }
-
-    // ── Address fallback: scan buttons with address-like content ──
-    if (!d.address) {
-      const buttons = panel.querySelectorAll('button, [role="link"]');
-      for (const btn of buttons) {
-        const btnText = btn.textContent?.trim() || '';
-        const btnAl = (btn.getAttribute('aria-label') || '').toLowerCase();
-        // Address patterns: contains street indicators
-        if ((btnText.length > 15 && (
-            btnText.includes('Jl.') || btnText.includes('Jalan') ||
-            btnText.includes('No.') || btnText.includes('Kec.') ||
-            btnText.includes('Kota') || btnText.includes('Kab.') ||
-            btnText.includes('Indonesia') || btnText.includes(',')
-          )) || btnAl.includes('alamat') || btnAl.includes('address')) {
-          d.address = btnText;
-          break;
-        }
-      }
-    }
-
-    // ── Email from panel text (scan only visible text nodes) ──
-    const bodyText = panel.innerText || '';
-    const emails = bodyText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
-    if (emails) {
-      for (const e of emails) {
-        const low = e.toLowerCase();
-        if (!low.includes('google.com') && !low.includes('gstatic') && !low.includes('googleapis')
-            && !low.includes('example.com') && !low.includes('sentry.io')) {
-          d.email = e;
-          break;
-        }
-      }
-    }
-
-    // ── Phone fallback: scan ALL elements with phone patterns ──
-    if (!d.phone) {
-      // Try buttons and links first
-      const phoneTargets = panel.querySelectorAll('button, [role="link"], a, div[data-item-id], span[data-item-id]');
-      for (const el of phoneTargets) {
-        const tx = el.textContent?.trim() || '';
-        const al = (el.getAttribute('aria-label') || '') + ' ' + tx;
-        // Match Indonesian phone: 08xx-xxxx-xxxx or +62xxx
-        const phoneMatch = al.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
-        if (phoneMatch) {
-          d.phone = phoneMatch[1].trim();
-          break;
-        }
-      }
-    }
-    // Last resort: scan ALL text in panel for phone pattern
-    if (!d.phone) {
-      const allText = panel.innerText || '';
-      const phoneMatch = allText.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
-      if (phoneMatch) {
-        d.phone = phoneMatch[1].trim();
       }
     }
 
@@ -658,10 +590,15 @@
       d.googleMapsUrl = window.location.href;
     }
 
-    // ── Business status ──
-    const statusEl = panel.querySelector('[class*="o0Svhf"], [class*="t39EBf"]');
-    if (statusEl) {
-      d.hours = d.hours || statusEl.textContent?.trim() || '';
+    // ── Services: scan text ──
+    if (!d.hasDelivery) d.hasDelivery = /belanja di toko|delivery|pengantaran/i.test(allText);
+    if (!d.hasTakeout) d.hasTakeout = /ambil di toko|takeout|ambil sendiri/i.test(allText);
+    if (!d.hasDineIn) d.hasDineIn = /makan di tempat|dine.in/i.test(allText);
+
+    // ── Plus Code: scan text ──
+    if (!d.plusCode) {
+      const pcMatch = allText.match(/([A-Z0-9]{4}\+[A-Z0-9]{2,3})/);
+      if (pcMatch) d.plusCode = pcMatch[1];
     }
 
     return d;
