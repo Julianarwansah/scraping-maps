@@ -36,6 +36,7 @@
 
   // ── API Intercept State ─────────────────────────────────────
   let interceptedData = {};
+  let interceptedTimestamp = 0;
   let originalFetch = null;
   let originalXHR = null;
 
@@ -101,47 +102,70 @@
 
   function parseAPIResponse(text, url) {
     // Google Maps API responses contain protobuf-like data with business info
-    // Extract phone, address, hours, website from the response text
+    const newTimestamp = Date.now();
 
     // Phone patterns in API response
     const phoneMatch = text.match(/"(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})"/);
-    if (phoneMatch) interceptedData.phone = phoneMatch[1];
+    if (phoneMatch) {
+      interceptedData.phone = phoneMatch[1];
+      interceptedTimestamp = newTimestamp;
+    }
 
     // Also try escaped phone patterns
     const phoneMatch2 = text.match(/\\\\x22(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})\\\\x22/);
-    if (phoneMatch2 && !interceptedData.phone) interceptedData.phone = phoneMatch2[1];
+    if (phoneMatch2 && !interceptedData.phone) {
+      interceptedData.phone = phoneMatch2[1];
+      interceptedTimestamp = newTimestamp;
+    }
 
     // Address patterns - look for structured address data
-    const addrMatch = text.match(/"((?:Jl\.|Jalan|Jl|Jalan Raya)[^"]{10,200})"/);
-    if (addrMatch) interceptedData.address = addrMatch[1];
+    const addrMatch = text.match(/"((?:Jl\.|Jalan|Jl|Jalan Raya|BSD|Taman|Kec\.|Kota|Indonesia)[^"]{10,200})"/);
+    if (addrMatch) {
+      interceptedData.address = addrMatch[1];
+      interceptedTimestamp = newTimestamp;
+    }
 
     // Website
     const webMatch = text.match(/"((?:https?:\/\/)[^"]*(?:\.com|\.co\.id|\.id|\.net|\.org)[^"]*)"/);
     if (webMatch && !webMatch[1].includes('google')) {
       interceptedData.website = webMatch[1];
+      interceptedTimestamp = newTimestamp;
     }
 
     // Hours
-    const hoursMatch = text.match(/"((?:Buka|Tutup|Jam)[^"]{5,100})"/);
-    if (hoursMatch) interceptedData.hours = hoursMatch[1];
+    const hoursMatch = text.match(/"((?:Buka|Tutup|Jam|Open|Closed)[^"]{5,100})"/);
+    if (hoursMatch) {
+      interceptedData.hours = hoursMatch[1];
+      interceptedTimestamp = newTimestamp;
+    }
 
     // Email
     const emailMatch = text.match(/"([^"]*@[^"]*\.(?:com|co\.id|id|net|org)[^"]*)"/);
     if (emailMatch && !emailMatch[1].includes('google')) {
       interceptedData.email = emailMatch[1];
+      interceptedTimestamp = newTimestamp;
     }
 
     // Reviews count
     const reviewsMatch = text.match(/"(\d+)\s*(?:ulasan|review|reviews)"/i);
-    if (reviewsMatch) interceptedData.reviews = reviewsMatch[1];
+    if (reviewsMatch) {
+      interceptedData.reviews = reviewsMatch[1];
+      interceptedTimestamp = newTimestamp;
+    }
 
     // Plus code
     const plusMatch = text.match(/"([A-Z0-9]{4}\+[A-Z0-9]{2,3})"/);
-    if (plusMatch) interceptedData.plusCode = plusMatch[1];
+    if (plusMatch) {
+      interceptedData.plusCode = plusMatch[1];
+      interceptedTimestamp = newTimestamp;
+    }
 
     // Price level
     const priceMatch = text.match(/"((?:Harga|Price|Rp)[^"]{2,30})"/i);
-    if (priceMatch) interceptedData.priceLevel = priceMatch[1];
+    if (priceMatch) {
+      interceptedData.priceLevel = priceMatch[1];
+      interceptedTimestamp = newTimestamp;
+    }
   }
 
   function restoreAPIIntercept() {
@@ -190,6 +214,7 @@
         try {
           // Reset intercepted data for this card
           interceptedData = {};
+          interceptedTimestamp = 0;
 
           // Scroll into view
           if (card.element && card.element.isConnected) {
@@ -202,8 +227,15 @@
             robustClick(card.element);
           }
 
-          // Wait for API response to be intercepted
-          await sleep(CFG.BETWEEN_ITEMS);
+          // Wait for API response with longer timeout
+          const waitStart = Date.now();
+          while (Date.now() - waitStart < CFG.PANEL_TIMEOUT) {
+            await sleep(300);
+            // If we got new intercepted data, break early
+            if (interceptedTimestamp > 0 && Date.now() - interceptedTimestamp < 2000) {
+              break;
+            }
+          }
 
           // Also try to extract from DOM as backup
           const panel = getPanel();
@@ -212,22 +244,35 @@
             domData = extractFromPanel(panel);
           }
 
-          // Merge: intercepted data + DOM data + list card data
+          // Validate: check if intercepted data is actually NEW (not from previous card)
+          const validIntercepted = {};
+          if (interceptedTimestamp > 0) {
+            // Use intercepted data only if it's fresh
+            validIntercepted.phone = interceptedData.phone || '';
+            validIntercepted.address = interceptedData.address || '';
+            validIntercepted.reviews = interceptedData.reviews || '';
+            validIntercepted.hours = interceptedData.hours || '';
+            validIntercepted.website = interceptedData.website || '';
+            validIntercepted.email = interceptedData.email || '';
+            validIntercepted.plusCode = interceptedData.plusCode || '';
+          }
+
+          // Merge: list card + intercepted API + DOM panel
           const merged = {
             name:          card.data.name || domData.name || '',
             rating:        card.data.rating || domData.rating || '',
-            reviews:       interceptedData.reviews || domData.reviews || card.data.reviews || '',
-            category:      card.data.category || domData.category || '',
-            phone:         interceptedData.phone || domData.phone || '',
-            address:       interceptedData.address || domData.address || '',
-            website:       interceptedData.website || domData.website || '',
-            email:         interceptedData.email || domData.email || '',
-            hours:         interceptedData.hours || domData.hours || '',
-            priceLevel:    interceptedData.priceLevel || domData.priceLevel || '',
+            reviews:       validIntercepted.reviews || domData.reviews || card.data.reviews || '',
+            category:      domData.category || card.data.category || '',
+            phone:         validIntercepted.phone || domData.phone || '',
+            address:       validIntercepted.address || domData.address || '',
+            website:       validIntercepted.website || domData.website || '',
+            email:         validIntercepted.email || domData.email || '',
+            hours:         validIntercepted.hours || domData.hours || '',
+            priceLevel:    domData.priceLevel || '',
             hasDelivery:   domData.hasDelivery || false,
             hasTakeout:    domData.hasTakeout || false,
             hasDineIn:     domData.hasDineIn || false,
-            plusCode:      interceptedData.plusCode || domData.plusCode || '',
+            plusCode:      validIntercepted.plusCode || domData.plusCode || '',
             googleMapsUrl: card.data.listUrl || domData.googleMapsUrl || window.location.href,
           };
 
@@ -239,7 +284,7 @@
 
           // Close panel
           pressEscape();
-          await sleep(300);
+          await sleep(500);
 
         } catch (err) {
           log(`[${pct}] ERROR: ${err.message}`);
@@ -430,9 +475,28 @@
     const m = allText.match(/\((\d[\d.,]*)\)/);
     if (m) d.reviews = m[1].replace(/[.,]/g, '');
 
-    // Category
-    const catMatch = allText.match(/·\s*([A-Z][a-zA-Z\s]{3,40})/);
-    if (catMatch) d.category = catMatch[1].trim();
+    // Category - look for short text after rating that looks like a category
+    if (!d.category) {
+      // Try to find category near the rating area
+      const ratingEl = panel.querySelector('span[role="img"]');
+      if (ratingEl && ratingEl.parentElement) {
+        const parent = ratingEl.parentElement;
+        const siblings = parent.querySelectorAll('span');
+        for (const sp of siblings) {
+          const t = sp.textContent?.trim() || '';
+          // Category should be short, no numbers, not a rating
+          if (t.length > 3 && t.length < 50 &&
+              !/^\d/.test(t) &&
+              !t.includes('(') &&
+              !t.includes('ulasan') &&
+              !t.includes('review') &&
+              t.toLowerCase() !== 'link yang dikunjungi') {
+            d.category = t;
+            break;
+          }
+        }
+      }
+    }
 
     // Phone - scan all buttons and text
     const phoneEls = panel.querySelectorAll('button, [role="link"], a, [data-item-id]');
