@@ -50,6 +50,7 @@
 
   // ── State ───────────────────────────────────────────────────
   let running = false;
+  let scrapeLimits = { min: 0, max: 0 };
 
   function messageHandler(msg, _sender, reply) {
     if (msg.action === 'startScraping') {
@@ -59,6 +60,7 @@
       }
       running = true;
       window.__msQuery = msg.query || '';
+      scrapeLimits = { min: msg.min || 0, max: msg.max || 0 };
       const speed = msg.speed || 'normal';
       const preset = SPEED_PRESETS[speed] || SPEED_PRESETS.normal;
       CFG = { ...BASE_CFG, ...preset };
@@ -101,18 +103,22 @@
       const results = [];
       let prevName = '';
 
-      for (let i = 0; i < basics.length; i++) {
-        const b = basics[i];
-        const pct = `${i + 1}/${basics.length}`;
-        overlay(`Scraping ${pct} — ${b.listData.name || '...'}`);
+      // Limit cards to scrape if max is set
+      const cardsToScrape = scrapeLimits.max > 0 ? basics.slice(0, scrapeLimits.max) : basics;
+
+      for (let i = 0; i < cardsToScrape.length; i++) {
+        const b = cardsToScrape[i];
+        const origIdx = basics.indexOf(b);
+        const pct = `${i + 1}/${cardsToScrape.length}`;
+        overlay(`Scraping ${pct} — ${b.listData.name || '...'}${scrapeLimits.max > 0 ? ` (max: ${scrapeLimits.max})` : ''}`);
 
         try {
           // Scroll into view
-          allCards[i].scrollIntoView({ block: 'center', behavior: 'instant' });
+          allCards[origIdx].scrollIntoView({ block: 'center', behavior: 'instant' });
           await sleep(600);
 
           // Click with full event simulation
-          const clicked = robustClick(allCards[i]);
+          const clicked = robustClick(allCards[origIdx]);
           if (!clicked) {
             log(`  [${pct}] SKIP — no click target`);
             results.push(merge(b.listData, {}));
@@ -141,8 +147,16 @@
 
       // 5. Send results
       removeOverlay();
+
+      // Check min limit
+      let warning = '';
+      if (scrapeLimits.min > 0 && results.length < scrapeLimits.min) {
+        warning = `⚠️ Hanya ${results.length} data (minimum: ${scrapeLimits.min})`;
+        log(warning);
+      }
+
       log('═══ DONE ═══  ' + results.length + ' results');
-      notify(results);
+      notify(results, warning);
 
     } catch (err) {
       // Global catch: never leave `running = true`
@@ -562,8 +576,8 @@
 
   function log(msg) { console.log('[MapsScraper] ' + msg); }
 
-  function notify(results) {
-    chrome.runtime.sendMessage({ action: 'scrapeResults', results, query: window.__msQuery || '' })
+  function notify(results, warning) {
+    chrome.runtime.sendMessage({ action: 'scrapeResults', results, query: window.__msQuery || '', warning: warning || '' })
       .catch(e => log('notify failed: ' + e.message));
   }
 

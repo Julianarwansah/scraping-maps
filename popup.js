@@ -58,6 +58,20 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.set({ scrapeSpeed: speedSelect.value });
   });
 
+  // ── Restore min/max settings ──
+  const minResults = document.getElementById('minResults');
+  const maxResults = document.getElementById('maxResults');
+  chrome.storage.local.get(['minResults', 'maxResults'], d => {
+    if (d.minResults !== undefined) minResults.value = d.minResults;
+    if (d.maxResults !== undefined) maxResults.value = d.maxResults;
+  });
+  minResults.addEventListener('input', () => {
+    chrome.storage.local.set({ minResults: parseInt(minResults.value) || 0 });
+  });
+  maxResults.addEventListener('input', () => {
+    chrome.storage.local.set({ maxResults: parseInt(maxResults.value) || 0 });
+  });
+
   // ── Check stored results from previous scrape ──
   chrome.storage.local.get(['lastResults', 'lastTime'], d => {
     if (d.lastResults?.length && d.lastTime && (Date.now() - d.lastTime < 3600000)) {
@@ -154,6 +168,16 @@ document.addEventListener('DOMContentLoaded', () => {
     removeExportBtn();
 
     const speed = speedSelect.value;
+    const min = parseInt(minResults.value) || 0;
+    const max = parseInt(maxResults.value) || 0;
+
+    // Validate min/max
+    if (min > 0 && max > 0 && min > max) {
+      stat.textContent = '⚠️ Minimum tidak boleh lebih besar dari maksimum.';
+      stat.style.color = 'var(--danger)';
+      resetBtn(btn);
+      return;
+    }
 
     // Check if radius is enabled
     if (radiusEnabled.checked && centerLocation.value.trim()) {
@@ -168,25 +192,22 @@ document.addEventListener('DOMContentLoaded', () => {
       const unit = radiusUnit.value;
       const radiusKm = unit === 'mi' ? radius * 1.60934 : radius;
 
-      // Warn for large radii
       if (radiusKm > 20) {
         stat.textContent = `⚠️ Radius ${radius} ${unit} akan menghasilkan banyak titik. Proses mungkin lama.`;
         stat.style.color = 'var(--warning)';
       }
 
-      // Generate radius queries from all keywords
       const allRadiusQueries = [];
       for (const q of queries) {
         const points = generateRadiusPoints(coords.lat, coords.lng, radiusKm, q);
         allRadiusQueries.push(...points);
       }
 
-      // Use batch scrape with radius queries
-      startBatchScrape(allRadiusQueries, stat, btn, speed);
+      startBatchScrape(allRadiusQueries, stat, btn, speed, min, max);
     } else if (queries.length === 1) {
-      startScrape(queries[0], stat, btn, speed);
+      startScrape(queries[0], stat, btn, speed, min, max);
     } else {
-      startBatchScrape(queries, stat, btn, speed);
+      startBatchScrape(queries, stat, btn, speed, min, max);
     }
   });
 });
@@ -199,11 +220,11 @@ function parseQueries(text) {
 }
 
 // ── Single query scrape ──
-function startScrape(query, stat, btn, speed) {
+function startScrape(query, stat, btn, speed, min, max) {
   stat.textContent = `Membuka Google Maps untuk "${query}"...`;
   stat.style.color = 'var(--text-muted)';
 
-  chrome.runtime.sendMessage({ action: 'scrapeData', query, speed }, res => {
+  chrome.runtime.sendMessage({ action: 'scrapeData', query, speed, min, max }, res => {
     if (chrome.runtime.lastError) {
       stat.textContent = '❌ ' + chrome.runtime.lastError.message;
       stat.style.color = 'var(--danger)';
@@ -220,14 +241,16 @@ function startScrape(query, stat, btn, speed) {
 }
 
 // ── Batch scrape ──
-function startBatchScrape(queries, stat, btn, speed) {
+function startBatchScrape(queries, stat, btn, speed, min, max) {
   stat.textContent = `🚀 Batch scrape: ${queries.length} keyword...`;
   stat.style.color = 'var(--text-muted)';
 
   chrome.runtime.sendMessage({
     action: 'batchScrape',
     queries,
-    speed
+    speed,
+    min,
+    max
   }, res => {
     if (chrome.runtime.lastError) {
       stat.textContent = '❌ ' + chrome.runtime.lastError.message;
@@ -253,8 +276,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     resetBtn(btn);
 
     if (msg.results?.length > 0) {
-      stat.textContent = `✅ ${msg.results.length} data ditemukan! Exporting...`;
-      stat.style.color = 'var(--success)';
+      const warnText = msg.warning ? ` ${msg.warning}` : '';
+      stat.textContent = `✅ ${msg.results.length} data ditemukan! Exporting...${warnText}`;
+      stat.style.color = msg.warning ? 'var(--warning)' : 'var(--success)';
 
       chrome.storage.local.set({ lastResults: msg.results, lastTime: Date.now() });
       saveToHistory(msg.query || 'Scrape', msg.results);

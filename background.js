@@ -98,7 +98,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
-    activeSessions.set('current', { query: searchQuery, startTime: Date.now(), speed: message.speed || 'normal', tabId: null });
+    activeSessions.set('current', { query: searchQuery, startTime: Date.now(), speed: message.speed || 'normal', tabId: null, min: message.min || 0, max: message.max || 0 });
     setBadge('...', '#1a73e8');
 
     chrome.tabs.create(
@@ -113,7 +113,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Store tabId for close detection
         const session = activeSessions.get('current');
         if (session) session.tabId = tab.id;
-        setupTabListener(tab.id, searchQuery, message.speed || 'normal');
+        setupTabListener(tab.id, searchQuery, message.speed || 'normal', message.min || 0, message.max || 0);
       }
     );
 
@@ -139,7 +139,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       currentIndex: 0,
       allResults: [],
       startTime: Date.now(),
-      speed: message.speed || 'normal'
+      speed: message.speed || 'normal',
+      min: message.min || 0,
+      max: message.max || 0
     };
 
     startBatchQuery();
@@ -180,7 +182,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       activeSessions.delete('current');
       setBadge(String(count), count > 0 ? '#34a853' : '#e67700');
       if (count > 0) {
-        notify('Scrape Selesai!', `${count} data bisnis ditemukan`);
+        const warnText = message.warning ? ` (${message.warning})` : '';
+        notify('Scrape Selesai!', `${count} data bisnis ditemukan${warnText}`);
       }
       chrome.runtime.sendMessage(message).catch(() => {
         chrome.storage.local.set({
@@ -243,7 +246,7 @@ function startBatchQuery() {
   const query = batchState.queries[batchState.currentIndex];
   console.log(`[BG] Batch query ${batchState.currentIndex + 1}/${batchState.queries.length}: "${query}"`);
 
-  activeSessions.set('current', { query, startTime: Date.now(), tabId: null });
+  activeSessions.set('current', { query, startTime: Date.now(), tabId: null, min: batchState.min, max: batchState.max });
 
   chrome.tabs.create(
     { url: buildSearchUrl(query) },
@@ -261,13 +264,13 @@ function startBatchQuery() {
       // Store tabId for close detection
       const session = activeSessions.get('current');
       if (session) session.tabId = tab.id;
-      setupTabListener(tab.id, query, batchState.speed);
+      setupTabListener(tab.id, query, batchState.speed, batchState.min, batchState.max);
     }
   );
 }
 
 // ── Tab listener setup ──
-function setupTabListener(tabId, searchQuery, speed) {
+function setupTabListener(tabId, searchQuery, speed, min, max) {
   let listenerRemoved = false;
 
   const listener = (changedTabId, changeInfo) => {
@@ -282,7 +285,9 @@ function setupTabListener(tabId, searchQuery, speed) {
         chrome.tabs.sendMessage(tabId, {
           action: 'startScraping',
           query: searchQuery,
-          speed: speed
+          speed: speed,
+          min: min || 0,
+          max: max || 0
         }).then(res => {
           console.log('[BG] Sent startScraping to tab', tabId, res);
           if (res?.status === 'error') {
@@ -300,7 +305,9 @@ function setupTabListener(tabId, searchQuery, speed) {
             return chrome.tabs.sendMessage(tabId, {
               action: 'startScraping',
               query: searchQuery,
-              speed: speed
+              speed: speed,
+              min: min || 0,
+              max: max || 0
             });
           }).catch(e => {
             console.error('[BG] Manual injection also failed:', e);
