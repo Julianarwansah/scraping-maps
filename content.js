@@ -472,6 +472,7 @@
   function extractFromPanel(panel) {
     const d = {};
     const allText = panel.innerText || '';
+    log('Panel text (500): ' + allText.substring(0, 500));
 
     // Name
     const h1 = panel.querySelector('h1');
@@ -485,59 +486,63 @@
       if (m) d.rating = m[1].replace(',', '.');
     }
 
-    // Reviews
-    const m = allText.match(/\((\d[\d.,]*)\)/);
-    if (m) d.reviews = m[1].replace(/[.,]/g, '');
+    // Reviews - scan aria-labels
+    const allSpans = panel.querySelectorAll('span[aria-label]');
+    for (const sp of allSpans) {
+      const al = (sp.getAttribute('aria-label') || '').toLowerCase();
+      if (al.includes('ulasan') || al.includes('review')) {
+        const m = al.match(/(\d[\d.,]*)/);
+        if (m) { d.reviews = m[1].replace(/[.,]/g, ''); break; }
+      }
+    }
+    if (!d.reviews) {
+      const m = allText.match(/\((\d[\d.,]+)\)/);
+      if (m) d.reviews = m[1].replace(/[.,]/g, '');
+    }
 
-    // Category - look for short text after rating that looks like a category
-    if (!d.category) {
-      // Try to find category near the rating area
-      const ratingEl = panel.querySelector('span[role="img"]');
-      if (ratingEl && ratingEl.parentElement) {
-        const parent = ratingEl.parentElement;
-        const siblings = parent.querySelectorAll('span');
-        for (const sp of siblings) {
-          const t = sp.textContent?.trim() || '';
-          // Category should be short, no numbers, not a rating
-          if (t.length > 3 && t.length < 50 &&
-              !/^\d/.test(t) &&
-              !t.includes('(') &&
-              !t.includes('ulasan') &&
-              !t.includes('review') &&
-              t.toLowerCase() !== 'link yang dikunjungi') {
-            d.category = t;
-            break;
-          }
+    // Category
+    const ratingEl = panel.querySelector('span[role="img"]');
+    if (ratingEl && ratingEl.parentElement) {
+      const siblings = ratingEl.parentElement.querySelectorAll('span');
+      for (const sp of siblings) {
+        const t = sp.textContent?.trim() || '';
+        if (t.length > 3 && t.length < 50 && !/^\d/.test(t) && !t.includes('(') &&
+            !t.includes('ulasan') && t.toLowerCase() !== 'link yang dikunjungi') {
+          d.category = t;
+          break;
         }
       }
     }
 
-    // Phone - scan all buttons and text
-    const phoneEls = panel.querySelectorAll('button, [role="link"], a, [data-item-id]');
-    for (const el of phoneEls) {
+    // Phone - scan ALL elements with text containing phone pattern
+    const phoneRegex = /(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/;
+    const allEls = panel.querySelectorAll('button, [role="link"], a, [data-item-id], div[tabindex], span');
+    for (const el of allEls) {
       const tx = el.textContent?.trim() || '';
-      const al = (el.getAttribute('aria-label') || '') + ' ' + tx;
-      const pm = al.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
-      if (pm) { d.phone = pm[1].trim(); break; }
+      if (tx.length < 20) {
+        const m = tx.match(phoneRegex);
+        if (m && !m[1].includes('pukul')) { d.phone = m[1].trim(); break; }
+      }
     }
     if (!d.phone) {
-      const pm = allText.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
-      if (pm) d.phone = pm[1].trim();
+      const m = allText.match(phoneRegex);
+      if (m && !m[1].includes('pukul')) d.phone = m[1].trim();
     }
 
     // Address
-    for (const el of phoneEls) {
+    const addrPatterns = [/MM[A-Z0-9]\+[A-Z0-9]{2}[^,\n]{3,100}/i, /Jl\.[^,\n]{5,100}/i, /Jalan[^,\n]{5,100}/i, /BSD[^,\n]{5,100}/i, /Kec\.[^,\n]{5,100}/i];
+    for (const el of allEls) {
       const tx = el.textContent?.trim() || '';
-      if (tx.length > 15 && (
-          tx.includes('Jl.') || tx.includes('Jalan') || tx.includes('No.') ||
-          tx.includes('Kec.') || tx.includes('Kota') || tx.includes('Indonesia')
-        )) {
-        d.address = tx;
-        break;
+      if (tx.length > 15) {
+        for (const pat of addrPatterns) {
+          const m = tx.match(pat);
+          if (m) { d.address = m[0].trim(); break; }
+        }
+        if (d.address) break;
       }
     }
 
-    // Hours - match specific patterns, stop before phone numbers
+    // Hours
     const hoursMatch = allText.match(/(Buka\s*·?\s*Tutup\s+pukul\s+\d{1,2}\.\d{2}|Tutup\s+pukul\s+\d{1,2}\.\d{2})/i);
     if (hoursMatch) d.hours = hoursMatch[1].trim();
 
@@ -551,6 +556,7 @@
       }
     }
 
+    log('DOM: phone=' + d.phone + ' reviews=' + d.reviews + ' addr=' + (d.address || '').substring(0, 40));
     return d;
   }
 
