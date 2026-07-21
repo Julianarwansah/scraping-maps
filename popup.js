@@ -1,6 +1,8 @@
 // ============================================================
 // Popup Script — Google Maps Scraper V4
-// Multi-query batch + CSV export support
+// Multi-query batch + CSV export + history
+// Audit-fixed: removed dead code, optimized DOM queries,
+//              capped history storage, fixed event listener leak
 // ============================================================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -60,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(['lastResults', 'lastTime'], d => {
     if (d.lastResults?.length && d.lastTime && (Date.now() - d.lastTime < 3600000)) {
       stat.textContent = `📋 Hasil sebelumnya: ${d.lastResults.length} data (1 jam terakhir)`;
-      stat.style.color = '#1a73e8';
+      stat.style.color = 'var(--accent)';
       addExportBtn(d.lastResults);
     }
   });
@@ -89,17 +91,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const queries = parseQueries(textarea.value);
     if (queries.length === 0) {
       stat.textContent = '⚠️ Masukkan keyword pencarian.';
-      stat.style.color = 'red';
+      stat.style.color = 'var(--danger)';
       return;
     }
 
-    // Save query for next time
     chrome.storage.local.set({ lastQuery: textarea.value });
 
     btn.disabled = true;
     removeExportBtn();
 
-    const speed = document.getElementById('speedSelect').value;
+    const speed = speedSelect.value;
 
     if (queries.length === 1) {
       startScrape(queries[0], stat, btn, speed);
@@ -119,28 +120,28 @@ function parseQueries(text) {
 // ── Single query scrape ──
 function startScrape(query, stat, btn, speed) {
   stat.textContent = `Membuka Google Maps untuk "${query}"...`;
-  stat.style.color = '#666';
+  stat.style.color = 'var(--text-muted)';
 
   chrome.runtime.sendMessage({ action: 'scrapeData', query, speed }, res => {
     if (chrome.runtime.lastError) {
       stat.textContent = '❌ ' + chrome.runtime.lastError.message;
-      stat.style.color = 'red';
+      stat.style.color = 'var(--danger)';
       resetBtn(btn);
     } else if (res?.status === 'started') {
       stat.textContent = '🗺️ Tab Maps terbuka! Scraping berjalan...';
-      stat.style.color = '#0d7d3f';
+      stat.style.color = 'var(--success)';
     } else if (res?.status === 'error') {
       stat.textContent = '⚠️ ' + (res.error || 'Sedang berjalan.');
-      stat.style.color = 'red';
+      stat.style.color = 'var(--danger)';
       resetBtn(btn);
     }
   });
 }
 
-// ── Batch scrape: multiple queries sequentially ──
+// ── Batch scrape ──
 function startBatchScrape(queries, stat, btn, speed) {
   stat.textContent = `🚀 Batch scrape: ${queries.length} keyword...`;
-  stat.style.color = '#666';
+  stat.style.color = 'var(--text-muted)';
 
   chrome.runtime.sendMessage({
     action: 'batchScrape',
@@ -149,14 +150,14 @@ function startBatchScrape(queries, stat, btn, speed) {
   }, res => {
     if (chrome.runtime.lastError) {
       stat.textContent = '❌ ' + chrome.runtime.lastError.message;
-      stat.style.color = 'red';
+      stat.style.color = 'var(--danger)';
       resetBtn(btn);
     } else if (res?.status === 'started') {
       stat.textContent = `🗺️ Batch scrape dimulai! ${queries.length} keyword akan diproses satu per satu...`;
-      stat.style.color = '#0d7d3f';
+      stat.style.color = 'var(--success)';
     } else if (res?.status === 'error') {
       stat.textContent = '⚠️ ' + (res.error || 'Gagal memulai batch scrape.');
-      stat.style.color = 'red';
+      stat.style.color = 'var(--danger)';
       resetBtn(btn);
     }
   });
@@ -172,47 +173,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 
     if (msg.results?.length > 0) {
       stat.textContent = `✅ ${msg.results.length} data ditemukan! Exporting...`;
-      stat.style.color = '#0d7d3f';
+      stat.style.color = 'var(--success)';
 
-      // Store for recovery
       chrome.storage.local.set({ lastResults: msg.results, lastTime: Date.now() });
-
-      // Save to history
       saveToHistory(msg.query || 'Scrape', msg.results);
 
       setTimeout(() => exportData(msg.results), 150);
     } else {
       stat.textContent = '⚠️ Tidak ada hasil. Coba keyword lain.';
-      stat.style.color = '#e67700';
+      stat.style.color = 'var(--warning)';
     }
   }
 
-  // Batch progress update
   if (msg.action === 'batchProgress') {
     const { current, total, query, collected } = msg;
     stat.textContent = `🗺️ [${current}/${total}] Scraping "${query}"... (${collected} data terkumpul)`;
-    stat.style.color = '#1a73e8';
+    stat.style.color = 'var(--accent)';
   }
 
-  // Batch complete
   if (msg.action === 'batchComplete') {
     resetBtn(btn);
 
     if (msg.results?.length > 0) {
-      // Deduplicate by name + address
       const deduped = deduplicate(msg.results);
       const removed = msg.results.length - deduped.length;
 
       let statusMsg = `✅ Batch selesai! ${deduped.length} data`;
       if (removed > 0) statusMsg += ` (${removed} duplikat dihapus)`;
       stat.textContent = statusMsg;
-      stat.style.color = '#0d7d3f';
+      stat.style.color = 'var(--success)';
 
       chrome.storage.local.set({ lastResults: deduped, lastTime: Date.now() });
       setTimeout(() => exportData(deduped), 150);
     } else {
       stat.textContent = '⚠️ Tidak ada hasil dari semua keyword.';
-      stat.style.color = '#e67700';
+      stat.style.color = 'var(--warning)';
     }
   }
 
@@ -253,12 +248,14 @@ function exportData(results) {
 //  CSV EXPORT
 // ============================================================
 function exportCSV(results) {
-  const headers = ['No', ...getExportHeaders()];
+  const selectedKeys = getSelectedColumns();
+  const selectedCols = COLUMNS.filter(col => selectedKeys.includes(col.key));
+  const headers = ['No', ...selectedCols.map(col => col.label)];
 
   const rows = [headers.join(',')];
   results.forEach((r, i) => {
     const row = [i + 1];
-    COLUMNS.filter(col => getSelectedColumns().includes(col.key)).forEach(col => {
+    selectedCols.forEach(col => {
       const val = r[col.key];
       row.push(col.key.startsWith('has') ? (val ? 'Yes' : '') : csvEscape(val));
     });
@@ -268,15 +265,14 @@ function exportCSV(results) {
   const csvContent = rows.join('\n');
   const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: `google_maps_${ts()}.csv` });
+  const a = Object.assign(document.createElement('a'), { href: url, download: `google_maps_${Date.now()}.csv` });
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 
-  const stat = document.getElementById('status');
   stat.textContent = `✅ Exported ${results.length} data ke CSV!`;
-  stat.style.color = '#0d7d3f';
+  stat.style.color = 'var(--success)';
 }
 
 function csvEscape(val) {
@@ -296,8 +292,9 @@ function exportExcel(results) {
     return;
   }
 
-  const H = ['No', ...getExportHeaders()];
-  const selectedCols = COLUMNS.filter(col => getSelectedColumns().includes(col.key));
+  const selectedKeys = getSelectedColumns();
+  const selectedCols = COLUMNS.filter(col => selectedKeys.includes(col.key));
+  const H = ['No', ...selectedCols.map(col => col.label)];
 
   const rows = [H];
   results.forEach((r, i) => {
@@ -319,11 +316,11 @@ function exportExcel(results) {
     XLSX.utils.book_append_sheet(wb, ws, 'Google Maps Data');
 
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    download(buf, `google_maps_${ts()}.xlsx`);
+    download(buf, `google_maps_${Date.now()}.xlsx`);
 
     const stat = document.getElementById('status');
     stat.textContent = `✅ Exported ${results.length} data ke Excel!`;
-    stat.style.color = '#0d7d3f';
+    stat.style.color = 'var(--success)';
   } catch (e) {
     console.error('[Popup] Export error:', e);
     document.getElementById('status').textContent = '❌ Export gagal: ' + e.message;
@@ -343,8 +340,6 @@ function download(buf, name) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-function ts() { return Date.now(); }
-
 function resetBtn(btn) {
   if (btn) { btn.disabled = false; btn.textContent = '🔍 Scrape Data'; }
 }
@@ -354,7 +349,7 @@ function addExportBtn(results) {
   const b = document.createElement('button');
   b.id = 'exportStoredBtn';
   b.textContent = '📥 Export Hasil Tersimpan';
-  b.style.cssText = 'width:100%;margin-top:8px;padding:8px;background:#34a853;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer';
+  b.style.cssText = 'width:100%;margin-top:8px;padding:8px;background:var(--success);color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer';
   b.onclick = () => { exportData(results); removeExportBtn(); };
   document.getElementById('status')?.parentNode?.insertBefore(b, document.getElementById('status').nextSibling);
 }
@@ -364,20 +359,28 @@ function removeExportBtn() {
 }
 
 // ============================================================
-//  SCRAPE HISTORY
+//  SCRAPE HISTORY (capped: max 10 entries, summary only)
 // ============================================================
+const MAX_HISTORY = 10;
+const MAX_HISTORY_RESULTS = 50; // Store max 50 results per history entry (to save storage)
+
 function saveToHistory(query, results) {
   chrome.storage.local.get(['scrapeHistory'], d => {
     const history = d.scrapeHistory || [];
+    // Store summary + first N results to save storage
+    const storedResults = results.length > MAX_HISTORY_RESULTS
+      ? results.slice(0, MAX_HISTORY_RESULTS)
+      : results;
     history.unshift({
       id: Date.now(),
       query,
       count: results.length,
+      fullCount: results.length,
       timestamp: Date.now(),
-      results
+      results: storedResults,
+      truncated: results.length > MAX_HISTORY_RESULTS
     });
-    // Keep max 20 history entries
-    if (history.length > 20) history.length = 20;
+    if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
     chrome.storage.local.set({ scrapeHistory: history }, () => {
       loadHistory();
     });
@@ -392,7 +395,7 @@ function loadHistory() {
     countEl.textContent = history.length;
 
     if (history.length === 0) {
-      list.innerHTML = '<div style="font-size:11px;color:#aaa;text-align:center;padding:12px">Belum ada riwayat</div>';
+      list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:12px">Belum ada riwayat</div>';
       return;
     }
 
@@ -402,27 +405,28 @@ function loadHistory() {
         day: 'numeric', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit'
       });
+      const truncLabel = item.truncated ? ' (dipotong)' : '';
       return `
         <div class="history-item">
           <div class="history-info">
             <div class="history-query">${escapeHtml(item.query)}</div>
-            <div class="history-meta">${item.count} data · ${timeStr}</div>
+            <div class="history-meta">${item.count} data${truncLabel} · ${timeStr}</div>
           </div>
           <button class="history-export" data-id="${item.id}">📥 Export</button>
         </div>
       `;
     }).join('');
 
-    // Bind export buttons
-    list.querySelectorAll('.history-export').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = parseInt(btn.dataset.id);
-        const entry = history.find(h => h.id === id);
-        if (entry?.results?.length) {
-          exportData(entry.results);
-        }
-      });
-    });
+    // Use event delegation instead of attaching listeners to each button
+    list.onclick = (e) => {
+      const exportBtn = e.target.closest('.history-export');
+      if (!exportBtn) return;
+      const id = parseInt(exportBtn.dataset.id);
+      const entry = history.find(h => h.id === id);
+      if (entry?.results?.length) {
+        exportData(entry.results);
+      }
+    };
   });
 }
 
@@ -458,14 +462,12 @@ function initColumnSelector() {
   const allColsBtn = document.getElementById('selectAllCols');
   const noneColsBtn = document.getElementById('deselectAllCols');
 
-  // Build checkboxes
   container.innerHTML = COLUMNS.map(col => `
     <label class="col-opt">
       <input type="checkbox" name="col" value="${col.key}" checked> ${col.label}
     </label>
   `).join('');
 
-  // Restore saved selection
   chrome.storage.local.get(['selectedColumns'], d => {
     if (d.selectedColumns) {
       container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -474,10 +476,8 @@ function initColumnSelector() {
     }
   });
 
-  // Save on change
   container.addEventListener('change', saveColumnSelection);
 
-  // Select all / deselect all
   allColsBtn.addEventListener('click', () => {
     container.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
     saveColumnSelection();
@@ -497,14 +497,6 @@ function saveColumnSelection() {
 function getSelectedColumns() {
   return Array.from(document.querySelectorAll('#columnSelector input[type="checkbox"]:checked'))
     .map(cb => cb.value);
-}
-
-function filterRowByColumns(row) {
-  const cols = getSelectedColumns();
-  // row is an array matching COLUMNS order; filter by selected keys
-  return COLUMNS
-    .filter(col => cols.includes(col.key))
-    .map((col, i) => row[COLUMNS.indexOf(col)]);
 }
 
 function getExportHeaders() {

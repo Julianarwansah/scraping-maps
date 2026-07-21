@@ -1,11 +1,15 @@
 // Background service worker - orchestrates scraping flow
 // V4: Multi-query batch + notifications + badge
+// Audit-fixed: session cleanup, badge timer management, tab close detection
 
 // Track active scrape sessions
 const activeSessions = new Map();
 
 // Batch scrape state
 let batchState = null;
+
+// Badge timer tracking (to cancel old timers)
+let badgeTimer = null;
 
 // ── Badge helpers ──
 function setBadge(text, color) {
@@ -15,6 +19,14 @@ function setBadge(text, color) {
 
 function clearBadge() {
   chrome.action.setBadgeText({ text: '' });
+}
+
+function scheduleBadgeClear(delayMs) {
+  if (badgeTimer) clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(() => {
+    clearBadge();
+    badgeTimer = null;
+  }, delayMs);
 }
 
 // ── Notification helper ──
@@ -27,6 +39,33 @@ function notify(title, message) {
     priority: 1
   });
 }
+
+// ── Cleanup session and related resources ──
+function cleanupSession(tabId) {
+  activeSessions.delete('current');
+  if (tabId) {
+    chrome.tabs.remove(tabId).catch(() => {});
+  }
+}
+
+// ── Listen for tab close to cleanup sessions ──
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const session = activeSessions.get('current');
+  if (session && session.tabId === tabId) {
+    console.warn('[BG] Scraping tab closed by user, cleaning up session');
+    activeSessions.delete('current');
+    clearBadge();
+    if (batchState) {
+      // Skip to next or finish
+      batchState.currentIndex++;
+      if (batchState.currentIndex < batchState.queries.length) {
+        setTimeout(() => startBatchQuery(), 1000);
+      } else {
+        finishBatch();
+      }
+    }
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // ── Single scrape ──
@@ -42,7 +81,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
-    activeSessions.set('current', { query: searchQuery, startTime: Date.now(), speed: message.speed || 'normal' });
+    activeSessions.set('current', { query: searchQuery, startTime: Date.now(), speed: message.speed || 'normal', tabId: null });
     setBadge('...', '#1a73e8');
 
     chrome.tabs.create(
@@ -54,6 +93,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ status: 'error', error: chrome.runtime.lastError.message });
           return;
         }
+        // Store tabId for close detection
+        const session = activeSessions.get('current');
+        if (session) session.tabId = tab.id;
         setupTabListener(tab.id, searchQuery, message.speed || 'normal');
       }
     );
@@ -83,7 +125,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       speed: message.speed || 'normal'
     };
 
-    // Start first query
     startBatchQuery();
 
     sendResponse({ status: 'started' });
@@ -95,14 +136,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const count = message.results?.length || 0;
     console.log(`[BG] Received ${count} results`);
 
-    // Check if we're in batch mode
     if (batchState) {
       batchState.allResults.push(...message.results);
 
-      // Update badge with total collected
       setBadge(String(batchState.allResults.length), '#1a73e8');
 
-      // Notify popup of progress
       const { currentIndex, queries, allResults } = batchState;
       chrome.runtime.sendMessage({
         action: 'batchProgress',
@@ -112,33 +150,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         collected: allResults.length
       }).catch(() => {});
 
-      // Move to next query
       batchState.currentIndex++;
 
       if (batchState.currentIndex < batchState.queries.length) {
-        // Small delay before next query
         activeSessions.delete('current');
         setTimeout(() => startBatchQuery(), 3000);
       } else {
-        // All done
-        const finalResults = batchState.allResults;
-        const batchQueries = batchState.queries;
-        batchState = null;
-        activeSessions.delete('current');
-
-        setBadge(String(finalResults.length), '#34a853');
-        notify('Batch Scrape Selesai!', `${finalResults.length} data dari ${batchQueries.length} keyword`);
-        setTimeout(clearBadge, 30000);
-
-        chrome.runtime.sendMessage({
-          action: 'batchComplete',
-          results: finalResults
-        }).catch(() => {
-          chrome.storage.local.set({
-            lastResults: finalResults,
-            lastTime: Date.now()
-          });
-        });
+        finishBatch();
       }
     } else {
       // Single scrape mode
@@ -146,8 +164,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       setBadge(String(count), count > 0 ? '#34a853' : '#e67700');
       if (count > 0) {
         notify('Scrape Selesai!', `${count} data bisnis ditemukan`);
-      } else {
-        notify('Scrape Selesai', 'Tidak ada hasil ditemukan');
       }
       chrome.runtime.sendMessage(message).catch(() => {
         chrome.storage.local.set({
@@ -155,8 +171,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           lastScrapeTime: Date.now()
         });
       });
-      // Clear badge after 30s
-      setTimeout(clearBadge, 30000);
+      scheduleBadgeClear(30000);
     }
 
     sendResponse({ status: 'received', count });
@@ -180,6 +195,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+// ── Finish batch and send results ──
+function finishBatch() {
+  if (!batchState) return;
+
+  const finalResults = batchState.allResults;
+  const batchQueries = batchState.queries;
+  batchState = null;
+  activeSessions.delete('current');
+
+  setBadge(String(finalResults.length), '#34a853');
+  notify('Batch Scrape Selesai!', `${finalResults.length} data dari ${batchQueries.length} keyword`);
+  scheduleBadgeClear(30000);
+
+  chrome.runtime.sendMessage({
+    action: 'batchComplete',
+    results: finalResults
+  }).catch(() => {
+    chrome.storage.local.set({
+      lastResults: finalResults,
+      lastTime: Date.now()
+    });
+  });
+}
+
 // ── Start a single query in batch mode ──
 function startBatchQuery() {
   if (!batchState) return;
@@ -187,28 +226,24 @@ function startBatchQuery() {
   const query = batchState.queries[batchState.currentIndex];
   console.log(`[BG] Batch query ${batchState.currentIndex + 1}/${batchState.queries.length}: "${query}"`);
 
-  activeSessions.set('current', { query, startTime: Date.now() });
+  activeSessions.set('current', { query, startTime: Date.now(), tabId: null });
 
   chrome.tabs.create(
     { url: `https://www.google.com/maps/search/${encodeURIComponent(query)}` },
     (tab) => {
       if (chrome.runtime.lastError) {
         console.error('[BG] Failed to create batch tab:', chrome.runtime.lastError);
-        // Skip this query, try next
         batchState.currentIndex++;
         if (batchState.currentIndex < batchState.queries.length) {
           setTimeout(() => startBatchQuery(), 1000);
         } else {
-          const finalResults = batchState.allResults;
-          batchState = null;
-          activeSessions.delete('current');
-          chrome.runtime.sendMessage({
-            action: 'batchComplete',
-            results: finalResults
-          }).catch(() => {});
+          finishBatch();
         }
         return;
       }
+      // Store tabId for close detection
+      const session = activeSessions.get('current');
+      if (session) session.tabId = tab.id;
       setupTabListener(tab.id, query, batchState.speed);
     }
   );
@@ -257,7 +292,7 @@ function setupTabListener(tabId, searchQuery, speed) {
 
   chrome.tabs.onUpdated.addListener(listener);
 
-  // Safety timeout: remove listener after 60s (longer for batch)
+  // Safety timeout: remove listener after 60s
   setTimeout(() => {
     if (!listenerRemoved) {
       listenerRemoved = true;

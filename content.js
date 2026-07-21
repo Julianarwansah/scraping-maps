@@ -1,6 +1,8 @@
 // ============================================================
-// Google Maps Scraper - Content Script V3
+// Google Maps Scraper - Content Script V4
 // Production-quality: two-pass, verified clicks, multi-language
+// Audit-fixed: global try-catch, optimized DOM scanning,
+//              isolated speed presets, cleaned guard state
 // ============================================================
 
 (() => {
@@ -8,17 +10,19 @@
   window.__mapsScraperV3 = true;
 
   // ── Config ──────────────────────────────────────────────────
-  const CFG = {
+  const BASE_CFG = {
     MAX_RETRIES:       15,
     RETRY_DELAY:       2000,
-    CLICK_SETTLE:      4500,   // ms to wait after click for panel
-    PANEL_POLL:        500,    // ms between panel-readiness checks
-    PANEL_TIMEOUT:     10000,  // max ms to wait for panel
+    CLICK_SETTLE:      4500,
+    PANEL_POLL:        500,
+    PANEL_TIMEOUT:     10000,
     SCROLL_PAUSE:      1200,
     BETWEEN_ITEMS:     1500,
     MAX_SCROLLS:       30,
-    SCROLL_STABLE:     3,      // scrolls with no new items → done
+    SCROLL_STABLE:     3,
   };
+  // Clone so speed presets don't mutate the original
+  let CFG = { ...BASE_CFG };
 
   // ── Language mappings (en + id) ─────────────────────────────
   const L = {
@@ -49,10 +53,10 @@
     if (msg.action === 'startScraping' && !running) {
       running = true;
       window.__msQuery = msg.query || '';
-      // Apply speed preset
+      // Create fresh CFG from base + speed preset (don't mutate BASE_CFG)
       const speed = msg.speed || 'normal';
       const preset = SPEED_PRESETS[speed] || SPEED_PRESETS.normal;
-      Object.assign(CFG, preset);
+      CFG = { ...BASE_CFG, ...preset };
       reply({ status: 'started' });
       setTimeout(() => main(msg.query || ''), 1500);
     }
@@ -65,72 +69,80 @@
   async function main(query) {
     log('═══ START ═══  query="' + query + '"');
 
-    // 1. Wait for the results feed
-    const feed = await waitFeed();
-    if (!feed) { fail('Feed tidak ditemukan. Pastikan Google Maps terbuka dengan benar.'); return; }
+    try {
+      // 1. Wait for the results feed
+      const feed = await waitFeed();
+      if (!feed) { fail('Feed tidak ditemukan. Pastikan Google Maps terbuka dengan benar.'); return; }
 
-    // 2. Scroll feed to load ALL results
-    overlay('Loading all results...');
-    const allCards = await loadAllCards(feed);
-    log('Total cards loaded: ' + allCards.length);
-    if (allCards.length === 0) { fail('Tidak ada hasil ditemukan.'); return; }
+      // 2. Scroll feed to load ALL results
+      overlay('Loading all results...');
+      const allCards = await loadAllCards(feed);
+      log('Total cards loaded: ' + allCards.length);
+      if (allCards.length === 0) { fail('Tidak ada hasil ditemukan.'); return; }
 
-    // 3. PASS 1 — collect basic data from every list card (no clicking)
-    overlay('Pass 1: Reading list cards...');
-    const basics = allCards.map((card, i) => ({
-      idx: i,
-      listData: extractCard(card),
-    }));
-    log('Pass 1 done — ' + basics.filter(b => b.listData.name).length + ' names found');
+      // 3. PASS 1 — collect basic data from every list card (no clicking)
+      overlay('Pass 1: Reading list cards...');
+      const basics = allCards.map((card, i) => ({
+        idx: i,
+        listData: extractCard(card),
+      }));
+      log('Pass 1 done — ' + basics.filter(b => b.listData.name).length + ' names found');
 
-    // 4. PASS 2 — click each card, read the detail panel, merge
-    overlay('Pass 2: Opening detail panels...');
-    const results = [];
-    let prevName = '';
+      // 4. PASS 2 — click each card, read the detail panel, merge
+      overlay('Pass 2: Opening detail panels...');
+      const results = [];
+      let prevName = '';
 
-    for (let i = 0; i < basics.length; i++) {
-      const b = basics[i];
-      const pct = `${i + 1}/${basics.length}`;
-      overlay(`Scraping ${pct} — ${b.listData.name || '...'}`);
+      for (let i = 0; i < basics.length; i++) {
+        const b = basics[i];
+        const pct = `${i + 1}/${basics.length}`;
+        overlay(`Scraping ${pct} — ${b.listData.name || '...'}`);
 
-      try {
-        // Scroll into view
-        allCards[i].scrollIntoView({ block: 'center', behavior: 'instant' });
-        await sleep(600);
+        try {
+          // Scroll into view
+          allCards[i].scrollIntoView({ block: 'center', behavior: 'instant' });
+          await sleep(600);
 
-        // Click with full event simulation
-        const clicked = robustClick(allCards[i]);
-        if (!clicked) {
-          log(`  [${pct}] SKIP — no click target`);
+          // Click with full event simulation
+          const clicked = robustClick(allCards[i]);
+          if (!clicked) {
+            log(`  [${pct}] SKIP — no click target`);
+            results.push(merge(b.listData, {}));
+            continue;
+          }
+
+          // Wait for detail panel to actually change
+          const detail = await waitForDetail(prevName);
+
+          // Merge: detail panel wins, list card fills gaps
+          const merged = merge(b.listData, detail);
+          results.push(merged);
+          prevName = merged.name;
+
+          log(`  [${pct}] ✓ ${merged.name}  📞${merged.phone || '-'}  📧${merged.email || '-'}  🌐${merged.website ? 'yes' : '-'}`);
+
+          // Close detail panel before next
+          pressEscape();
+          await sleep(CFG.BETWEEN_ITEMS);
+
+        } catch (err) {
+          log(`  [${pct}] ERROR: ${err.message}`);
           results.push(merge(b.listData, {}));
-          continue;
         }
-
-        // Wait for detail panel to actually change
-        const detail = await waitForDetail(prevName);
-
-        // Merge: detail panel wins, list card fills gaps
-        const merged = merge(b.listData, detail);
-        results.push(merged);
-        prevName = merged.name;
-
-        log(`  [${pct}] ✓ ${merged.name}  📞${merged.phone || '-'}  📧${merged.email || '-'}  🌐${merged.website ? 'yes' : '-'}`);
-
-        // Close detail panel before next
-        pressEscape();
-        await sleep(CFG.BETWEEN_ITEMS);
-
-      } catch (err) {
-        log(`  [${pct}] ERROR: ${err.message}`);
-        results.push(merge(b.listData, {}));
       }
-    }
 
-    // 5. Send results
-    removeOverlay();
-    log('═══ DONE ═══  ' + results.length + ' results');
-    notify(results);
-    running = false;
+      // 5. Send results
+      removeOverlay();
+      log('═══ DONE ═══  ' + results.length + ' results');
+      notify(results);
+
+    } catch (err) {
+      // Global catch: never leave `running = true`
+      log('═══ FATAL ERROR ═══  ' + err.message);
+      fail('Terjadi error: ' + err.message);
+    } finally {
+      running = false;
+    }
   }
 
   // ============================================================
@@ -152,7 +164,6 @@
     let prev = 0;
 
     for (let s = 0; s < CFG.MAX_SCROLLS; s++) {
-      // Collect current cards
       queryCards(feed).forEach(c => seen.add(cardId(c)));
 
       feed.scrollTop = feed.scrollHeight;
@@ -168,12 +179,10 @@
       prev = now;
     }
 
-    // Return actual DOM elements in order
     return queryCards(feed);
   }
 
   function queryCards(feed) {
-    // Try progressively broader selectors
     const selectors = [
       ':scope > div > div > div[data-index]',
       ':scope > div > div[jsaction*="mouseover"]',
@@ -184,7 +193,6 @@
       const items = feed.querySelectorAll(sel);
       if (items.length > 0) return Array.from(items);
     }
-    // Broadest: any div child that contains a link
     const all = feed.querySelectorAll(':scope > div > div > div');
     return Array.from(all).filter(el =>
       el.querySelector('a[href*="/maps/place"], a[data-item-id], [role="article"], [role="link"]')
@@ -192,7 +200,6 @@
   }
 
   function cardId(card) {
-    // Use a combination of text content and position for dedup
     const name = card.querySelector('[class*="fontHeadlineSmall"], [role="heading"]')?.textContent || '';
     const link = card.querySelector('a[href*="/maps/place"]')?.getAttribute('href') || '';
     return name + '|' + link.slice(0, 80);
@@ -204,7 +211,6 @@
   function extractCard(card) {
     const d = { name:'', rating:'', reviews:'', category:'', address:'', phone:'', listUrl:'' };
 
-    // Name
     d.name = txt(
       card.querySelector('[class*="fontHeadlineSmall"]'),
       card.querySelector('[role="heading"]'),
@@ -212,37 +218,30 @@
       card.querySelector('.NrDZNb')
     );
 
-    // Rating from aria-label on star image
     const starEl = card.querySelector('span[role="img"]');
     if (starEl) {
       const al = starEl.getAttribute('aria-label') || '';
       const m = al.match(/([\d.,]+)/);
       if (m) d.rating = m[1].replace(',', '.');
-      // Reviews count: "4.5 (123)" pattern
       const r = al.match(/\(([\d.,]+)\)/);
       if (r) d.reviews = r[1].replace(/[.,]/g, '');
     }
 
-    // Category — usually a span after the rating
-    const spans = card.querySelectorAll('span');
-    for (const sp of spans) {
-      const t = sp.textContent?.trim() || '';
-      if (t.length >= 4 && t.length < 80 && !/^\d/.test(t) && !t.includes('•')
-          && !sp.closest('[role="heading"]') && !sp.closest('a[href*="/maps/place"]')
-          && !sp.closest('span[role="img"]')) {
+    // Category — use a more targeted selector instead of iterating all spans
+    const catEl = card.querySelector('[class*="W4Efsd"] span, [class*="fontBodyMedium"] span');
+    if (catEl) {
+      const t = catEl.textContent?.trim() || '';
+      if (t.length >= 4 && t.length < 80 && !/^\d/.test(t)) {
         d.category = t;
-        break;
       }
     }
 
-    // Address from list card (sometimes visible)
     const addrEl = card.querySelector('[class*="W4Efsd"]:last-child span:last-child');
     if (addrEl) {
       const t = addrEl.textContent?.trim() || '';
       if (t.length > 10 && !t.includes('·')) d.address = t;
     }
 
-    // URL from the card's link
     const link = card.querySelector('a[href*="/maps/place"]');
     if (link) d.listUrl = link.getAttribute('href') || '';
 
@@ -253,7 +252,6 @@
   //  PASS 2 — CLICK & DETAIL PANEL
   // ============================================================
   function robustClick(item) {
-    // Find the best clickable target
     const targets = [
       item.querySelector('a[href*="/maps/place"]'),
       item.querySelector('a[data-item-id]'),
@@ -266,7 +264,6 @@
 
     const target = targets[0] || item;
 
-    // Full pointer + mouse event chain for Google Maps
     const opts = { bubbles: true, cancelable: true, composed: true, view: window };
     const rect = target.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
@@ -293,17 +290,13 @@
       const name = extractPanelName(panel);
       if (!name) continue;
 
-      // If we had a previous name, verify this is different
       if (prevName && name.toLowerCase() === prevName.toLowerCase()) {
-        // Same name — panel hasn't updated yet, keep waiting
         continue;
       }
 
-      // Panel has a name (and it's different from prev) — extract everything
       return extractAll(panel);
     }
 
-    // Timeout — extract whatever we can
     const panel = getPanel();
     return panel ? extractAll(panel) : emptyData();
   }
@@ -324,12 +317,11 @@
   }
 
   // ============================================================
-  //  DETAIL PANEL — COMPREHENSIVE EXTRACTION
+  //  DETAIL PANEL — OPTIMIZED EXTRACTION
   // ============================================================
   function extractAll(panel) {
     const d = emptyData();
 
-    // ── Name ──
     d.name = extractPanelName(panel);
     if (!d.name) return d;
 
@@ -343,25 +335,10 @@
       if (m) d.rating = m[1].replace(',', '.');
     }
 
-    // ── Reviews count ──
-    panel.querySelectorAll('span').forEach(sp => {
-      if (d.reviews) return;
-      const al = (sp.getAttribute('aria-label') || '').toLowerCase();
-      const tx = sp.textContent || '';
-      if (matchKw(al, L.reviews) || matchKw(tx, L.reviews)) {
-        const m = (al + ' ' + tx).match(/([\d.,]+)/);
-        if (m) d.reviews = m[1].replace(/[.,]/g, '');
-      }
-    });
-
-    // ── Category ──
-    const catEl = panel.querySelector('button[jsaction*="category"]') ||
-                  panel.querySelector('.DkEaL') ||
-                  panel.querySelector('[data-attrid="category"]');
-    d.category = txt(catEl);
-
-    // ── Scan ALL elements with aria-label or data-item-id ──
-    panel.querySelectorAll('[aria-label], [data-item-id]').forEach(el => {
+    // ── OPTIMIZED: Single-pass scan of aria-label and data-item-id elements ──
+    // Instead of separate queries for each field, scan once and collect all
+    const ariaElements = panel.querySelectorAll('[aria-label], [data-item-id]');
+    for (const el of ariaElements) {
       const al  = (el.getAttribute('aria-label') || '').toLowerCase();
       const did = (el.getAttribute('data-item-id') || '').toLowerCase();
       const tx  = el.textContent?.trim() || '';
@@ -370,33 +347,27 @@
       if (!d.phone && (matchKw(al, L.phone) || did.includes('phone') || did.includes('telp'))) {
         d.phone = cleanPhone(el, al, tx);
       }
-
       // ADDRESS
       if (!d.address && (matchKw(al, L.address) || did.includes('address') || did.includes('loc'))) {
         d.address = cleanLabel(al, L.address) || tx;
       }
-
       // WEBSITE
       if (!d.website && (matchKw(al, L.website) || did.includes('website') || did === 'url')) {
         const a = el.querySelector('a[href]');
         d.website = a?.getAttribute('href') || tx;
       }
-
       // HOURS
       if (!d.hours && (matchKw(al, L.hours) || did.includes('oh') || did.includes('hours'))) {
         d.hours = cleanLabel(al, L.hours) || tx;
       }
-
       // PLUS CODE
       if (!d.plusCode && (did.includes('plus_code') || did.includes('pluscode') || al.includes('plus code'))) {
         d.plusCode = tx;
       }
-
       // PRICE LEVEL
       if (!d.priceLevel && (matchKw(al, L.price) || did.includes('price'))) {
         d.priceLevel = tx || cleanLabel(al, L.price);
       }
-
       // SERVICES
       if (!d.hasDelivery && (matchKw(al, L.delivery) || did.includes('delivery'))) {
         d.hasDelivery = true;
@@ -407,23 +378,45 @@
       if (!d.hasDineIn && (matchKw(al, L.dinein) || did.includes('dine-in'))) {
         d.hasDineIn = true;
       }
-    });
 
-    // ── Website fallback: scan links ──
+      // Early exit: if we have all common fields, stop scanning
+      if (d.phone && d.address && d.website && d.hours) break;
+    }
+
+    // ── Reviews: targeted scan only spans with aria-label ──
+    if (!d.reviews) {
+      const reviewSpans = panel.querySelectorAll('span[aria-label]');
+      for (const sp of reviewSpans) {
+        const al = (sp.getAttribute('aria-label') || '').toLowerCase();
+        if (matchKw(al, L.reviews)) {
+          const m = al.match(/([\d.,]+)/);
+          if (m) { d.reviews = m[1].replace(/[.,]/g, ''); break; }
+        }
+      }
+    }
+
+    // ── Category ──
+    const catEl = panel.querySelector('button[jsaction*="category"]') ||
+                  panel.querySelector('.DkEaL') ||
+                  panel.querySelector('[data-attrid="category"]');
+    d.category = txt(catEl);
+
+    // ── Website fallback: scan only links with aria-label (not all links) ──
     if (!d.website) {
-      panel.querySelectorAll('a[href]').forEach(a => {
-        if (d.website) return;
-        const href = a.getAttribute('href') || '';
+      const labeledLinks = panel.querySelectorAll('a[aria-label]');
+      for (const a of labeledLinks) {
         const al = (a.getAttribute('aria-label') || '').toLowerCase();
+        const href = a.getAttribute('href') || '';
         if ((matchKw(al, L.website) || al.includes('buka'))
             && href.startsWith('http')
             && !href.includes('google') && !href.includes('gstatic')) {
           d.website = href;
+          break;
         }
-      });
+      }
     }
 
-    // ── Hours: look for the hours button/section more aggressively ──
+    // ── Hours fallback ──
     if (!d.hours) {
       const hoursSection = panel.querySelector('[aria-label*="Jam"], [aria-label*="jam"], [data-item-id="oh"]');
       if (hoursSection) {
@@ -431,7 +424,7 @@
       }
     }
 
-    // ── Email from panel text ──
+    // ── Email from panel text (scan only visible text nodes) ──
     const bodyText = panel.innerText || '';
     const emails = bodyText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g);
     if (emails) {
@@ -445,19 +438,19 @@
       }
     }
 
-    // ── Phone fallback: scan all buttons and divs for phone patterns ──
+    // ── Phone fallback: scan buttons with aria-label only ──
     if (!d.phone) {
-      panel.querySelectorAll('button, div[data-item-id], [role="link"]').forEach(el => {
-        if (d.phone) return;
+      const phoneTargets = panel.querySelectorAll('button[aria-label], [role="link"][aria-label]');
+      for (const el of phoneTargets) {
         const al = (el.getAttribute('aria-label') || '').toLowerCase();
         const tx = el.textContent?.trim() || '';
         const combined = al + ' ' + tx;
-        // Indonesian phone pattern: 0xxx-xxxx-xxxx or +62 xxx
         const phoneMatch = combined.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
         if (phoneMatch) {
           d.phone = phoneMatch[1].trim();
+          break;
         }
-      });
+      }
     }
 
     // ── Google Maps URL ──
@@ -470,7 +463,7 @@
       d.googleMapsUrl = window.location.href;
     }
 
-    // ── Business status (open/closed) ──
+    // ── Business status ──
     const statusEl = panel.querySelector('[class*="o0Svhf"], [class*="t39EBf"]');
     if (statusEl) {
       d.hours = d.hours || statusEl.textContent?.trim() || '';
@@ -533,17 +526,14 @@
   }
 
   function cleanPhone(el, ariaLabel, text) {
-    // From aria-label
     if (ariaLabel) {
       let c = ariaLabel;
       for (const kw of L.phone) c = c.replace(new RegExp(kw, 'gi'), '');
       c = c.replace(/^[\s:]+/, '').replace(/[\s:]+$/, '').trim();
       if (c.length >= 8) return c;
     }
-    // From text content
     const m = text.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
     if (m) return m[1].trim();
-    // Raw text if short enough to be a phone
     if (text.length >= 8 && text.length <= 20 && /^[\d\s\-+()]+$/.test(text)) return text;
     return text;
   }
@@ -593,7 +583,9 @@
     if (el) {
       el.textContent = '✓ Selesai! Data sudah dikirim.';
       el.style.background = 'linear-gradient(135deg,#34a853,#1b7a3d)';
-      setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .5s'; setTimeout(() => el.remove(), 600); }, 2500);
+      el.style.transition = 'opacity .5s';
+      setTimeout(() => { el.style.opacity = '0'; }, 2500);
+      setTimeout(() => { el.remove(); }, 3200);
     }
   }
 

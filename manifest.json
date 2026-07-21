@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Google Maps Scraper Pro",
-  "version": "2.0",
+  "version": "3.0",
   "description": "Professional Google Maps scraper — extracts business name, phone, email, website, address, hours, and more",
   "action": {
     "default_popup": "popup.html",
@@ -27,8 +27,7 @@
     "notifications"
   ],
   "host_permissions": [
-    "https://www.google.com/maps/*",
-    "https://www.google.com/*"
+    "https://www.google.com/maps/*"
   ],
   "content_scripts": [
     {
