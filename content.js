@@ -78,17 +78,28 @@
   // ============================================================
   async function main(query) {
     log('═══ START ═══  query="' + query + '"');
+    log('Limits: min=' + scrapeLimits.min + ', max=' + scrapeLimits.max);
+    log('URL: ' + window.location.href);
 
     try {
       // 1. Wait for the results feed
       const feed = await waitFeed();
-      if (!feed) { fail('Feed tidak ditemukan. Pastikan Google Maps terbuka dengan benar.'); return; }
+      if (!feed) {
+        log('Feed not found. Page elements: ' + document.querySelectorAll('*').length);
+        fail('Feed tidak ditemukan. Pastikan Google Maps terbuka dengan benar.');
+        return;
+      }
 
       // 2. Scroll feed to load ALL results
       overlay('Loading all results...');
+      log('Feed tag: ' + feed.tagName + ', role: ' + feed.getAttribute('role') + ', children: ' + feed.children.length);
       const allCards = await loadAllCards(feed);
       log('Total cards loaded: ' + allCards.length);
-      if (allCards.length === 0) { fail('Tidak ada hasil ditemukan.'); return; }
+      if (allCards.length === 0) {
+        log('No cards found. Feed HTML (first 500 chars): ' + feed.innerHTML.substring(0, 500));
+        fail('Tidak ada hasil ditemukan.');
+        return;
+      }
 
       // 3. PASS 1 — collect basic data from every list card (no clicking)
       overlay('Pass 1: Reading list cards...');
@@ -172,10 +183,28 @@
   // ============================================================
   async function waitFeed() {
     for (let i = 0; i < CFG.MAX_RETRIES; i++) {
-      const f = document.querySelector('[role="feed"]');
-      if (f) return f;
+      // Try multiple selectors for the feed container
+      const selectors = [
+        '[role="feed"]',
+        '[role="main"] > div > div > div',
+        '.m6QErb',  // Common Google Maps feed class
+        '[aria-label]',
+      ];
+      for (const sel of selectors) {
+        const f = document.querySelector(sel);
+        if (f && f.children.length > 0) {
+          log('Feed found via: ' + sel + ' (children: ' + f.children.length + ')');
+          return f;
+        }
+      }
       log('Waiting for feed (' + (i + 1) + '/' + CFG.MAX_RETRIES + ')...');
       await sleep(CFG.RETRY_DELAY);
+    }
+    // Final fallback: return the scrollable container
+    const fallback = document.querySelector('[role="main"]') || document.querySelector('.m6QErb');
+    if (fallback) {
+      log('Using fallback feed container');
+      return fallback;
     }
     return null;
   }
@@ -185,8 +214,23 @@
     let stable = 0;
     let prev = 0;
 
+    // Initial wait for cards to appear
+    for (let w = 0; w < 10; w++) {
+      const initialCards = queryCards(feed);
+      if (initialCards.length > 0) {
+        log('Initial cards found: ' + initialCards.length);
+        break;
+      }
+      log('Waiting for cards to appear... (' + (w + 1) + '/10)');
+      await sleep(1000);
+    }
+
     for (let s = 0; s < CFG.MAX_SCROLLS; s++) {
-      queryCards(feed).forEach(c => seen.add(cardId(c)));
+      const currentCards = queryCards(feed);
+      currentCards.forEach(c => {
+        const id = cardId(c);
+        if (id !== '|') seen.add(id); // Skip cards with no ID
+      });
 
       feed.scrollTop = feed.scrollHeight;
       await sleep(CFG.SCROLL_PAUSE);
@@ -201,16 +245,23 @@
       prev = now;
     }
 
-    return queryCards(feed);
+    const finalCards = queryCards(feed);
+    log('Scroll complete. Final cards: ' + finalCards.length + ', Unique IDs: ' + seen.size);
+    return finalCards;
   }
 
   function queryCards(feed) {
-    // Try multiple selectors to find result cards
+    // Try progressively broader selectors to find result cards
     const selectors = [
+      // Specific Google Maps selectors
       'div[data-index]',
       'div[jsaction*="mouseover"]',
       'div[role="article"]',
       'a[href*="/maps/place"]',
+      // Common class patterns
+      '.Nv2PK',
+      '.bfw7rf',
+      // Structural selectors
       ':scope > div > div > div[data-index]',
       ':scope > div > div[jsaction*="mouseover"]',
       ':scope > div > div > div[role="article"]',
@@ -219,20 +270,47 @@
     for (const sel of selectors) {
       try {
         const items = feed.querySelectorAll(sel);
-        if (items.length > 0) return Array.from(items);
+        if (items.length > 0) {
+          log('Cards found via: ' + sel + ' (count: ' + items.length + ')');
+          return Array.from(items);
+        }
       } catch (e) { /* invalid selector, skip */ }
     }
-    // Broadest fallback: any child with a link
-    const all = feed.querySelectorAll('*');
-    return Array.from(all).filter(el =>
-      el.querySelector('a[href*="/maps/place"], a[data-item-id], [role="article"], [role="link"]')
-    ).slice(0, 100); // Cap to prevent performance issues
+
+    // Fallback: find direct children that contain links to places
+    log('Trying fallback card detection...');
+    const cards = [];
+    const allLinks = feed.querySelectorAll('a[href*="/maps/place"]');
+    for (const link of allLinks) {
+      // Get the closest card-like parent
+      let card = link.closest('[data-index]') ||
+                 link.closest('[role="article"]') ||
+                 link.closest('div[jsaction]') ||
+                 link.parentElement?.parentElement;
+      if (card && !cards.includes(card)) {
+        cards.push(card);
+      }
+    }
+    if (cards.length > 0) {
+      log('Fallback found ' + cards.length + ' cards');
+      return cards;
+    }
+
+    // Last resort: any element with place links
+    const all = feed.querySelectorAll('div');
+    const result = Array.from(all).filter(el => {
+      const link = el.querySelector('a[href*="/maps/place"]');
+      return link && el.offsetHeight > 50 && el.offsetHeight < 500;
+    }).slice(0, 100);
+    log('Last resort found ' + result.length + ' potential cards');
+    return result;
   }
 
   function cardId(card) {
-    const name = card.querySelector('[class*="fontHeadlineSmall"], [role="heading"]')?.textContent || '';
+    const name = card.querySelector('[class*="fontHeadlineSmall"], [role="heading"], .qBF1Pd, .NrDZNb')?.textContent || '';
     const link = card.querySelector('a[href*="/maps/place"]')?.getAttribute('href') || '';
-    return name + '|' + link.slice(0, 80);
+    if (!name && !link) return ''; // Skip cards with no identifiable data
+    return (name || 'unknown') + '|' + (link.slice(0, 80) || Math.random().toString(36).slice(2, 8));
   }
 
   // ============================================================
