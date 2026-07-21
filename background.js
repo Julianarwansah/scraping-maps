@@ -185,11 +185,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const warnText = message.warning ? ` (${message.warning})` : '';
         notify('Scrape Selesai!', `${count} data bisnis ditemukan${warnText}`);
       }
-      chrome.runtime.sendMessage(message).catch(() => {
-        chrome.storage.local.set({
-          lastScrapeResults: message.results,
-          lastScrapeTime: Date.now()
-        });
+      // Try to send to popup, if closed save to storage
+      chrome.runtime.sendMessage(message).then(() => {
+        // Popup received the message
+      }).catch(() => {
+        // Popup is closed — save results AND history directly from background
+        saveResultsToStorage(message.results, message.query || 'Scrape');
       });
       scheduleBadgeClear(30000);
     }
@@ -215,6 +216,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+// ── Save results to storage (same keys as popup) + history ──
+function saveResultsToStorage(results, query) {
+  // Save to same keys that popup reads from
+  chrome.storage.local.set({
+    lastResults: results,
+    lastTime: Date.now()
+  });
+
+  // Also save to history (same format as popup)
+  chrome.storage.local.get(['scrapeHistory'], d => {
+    const history = d.scrapeHistory || [];
+    const storedResults = results.length > 50 ? results.slice(0, 50) : results;
+    history.unshift({
+      id: Date.now(),
+      query: query,
+      count: results.length,
+      timestamp: Date.now(),
+      results: storedResults,
+      truncated: results.length > 50
+    });
+    if (history.length > 10) history.length = 10;
+    chrome.storage.local.set({ scrapeHistory: history });
+  });
+
+  console.log('[BG] Saved ' + results.length + ' results to storage + history');
+}
+
 // ── Finish batch and send results ──
 function finishBatch() {
   if (!batchState) return;
@@ -231,11 +259,11 @@ function finishBatch() {
   chrome.runtime.sendMessage({
     action: 'batchComplete',
     results: finalResults
+  }).then(() => {
+    // Popup received the message
   }).catch(() => {
-    chrome.storage.local.set({
-      lastResults: finalResults,
-      lastTime: Date.now()
-    });
+    // Popup is closed — save results AND history
+    saveResultsToStorage(finalResults, `Batch (${batchQueries.length} keyword)`);
   });
 }
 
