@@ -216,6 +216,9 @@
           interceptedData = {};
           interceptedTimestamp = 0;
 
+          // Get current panel name (to detect change)
+          const prevPanelName = getPanelName();
+
           // Scroll into view
           if (card.element && card.element.isConnected) {
             card.element.scrollIntoView({ block: 'center', behavior: 'instant' });
@@ -227,52 +230,55 @@
             robustClick(card.element);
           }
 
-          // Wait for API response with longer timeout
+          // Wait for panel to show DIFFERENT business name
+          let panelChanged = false;
           const waitStart = Date.now();
           while (Date.now() - waitStart < CFG.PANEL_TIMEOUT) {
             await sleep(300);
-            // If we got new intercepted data, break early
-            if (interceptedTimestamp > 0 && Date.now() - interceptedTimestamp < 2000) {
+            const currentName = getPanelName();
+            // Panel changed if name is different from previous AND matches current card
+            if (currentName && currentName !== prevPanelName) {
+              panelChanged = true;
               break;
             }
           }
 
-          // Also try to extract from DOM as backup
+          if (!panelChanged) {
+            log(`[${pct}] Panel did not change for ${card.data.name}`);
+          }
+
+          // Wait a bit more for full data load
+          await sleep(800);
+
+          // Extract from DOM panel
           const panel = getPanel();
           let domData = {};
           if (panel) {
             domData = extractFromPanel(panel);
           }
 
-          // Validate: check if intercepted data is actually NEW (not from previous card)
-          const validIntercepted = {};
-          if (interceptedTimestamp > 0) {
-            // Use intercepted data only if it's fresh
-            validIntercepted.phone = interceptedData.phone || '';
-            validIntercepted.address = interceptedData.address || '';
-            validIntercepted.reviews = interceptedData.reviews || '';
-            validIntercepted.hours = interceptedData.hours || '';
-            validIntercepted.website = interceptedData.website || '';
-            validIntercepted.email = interceptedData.email || '';
-            validIntercepted.plusCode = interceptedData.plusCode || '';
+          // Use intercepted API data only if it's FRESH
+          const apiData = {};
+          if (interceptedTimestamp > 0 && (Date.now() - interceptedTimestamp) < 5000) {
+            Object.assign(apiData, interceptedData);
           }
 
-          // Merge: list card + intercepted API + DOM panel
+          // Merge: list card data + API intercepted + DOM panel
           const merged = {
             name:          card.data.name || domData.name || '',
             rating:        card.data.rating || domData.rating || '',
-            reviews:       validIntercepted.reviews || domData.reviews || card.data.reviews || '',
+            reviews:       apiData.reviews || domData.reviews || card.data.reviews || '',
             category:      domData.category || card.data.category || '',
-            phone:         validIntercepted.phone || domData.phone || '',
-            address:       validIntercepted.address || domData.address || '',
-            website:       validIntercepted.website || domData.website || '',
-            email:         validIntercepted.email || domData.email || '',
-            hours:         validIntercepted.hours || domData.hours || '',
+            phone:         apiData.phone || domData.phone || '',
+            address:       apiData.address || domData.address || '',
+            website:       apiData.website || domData.website || '',
+            email:         apiData.email || domData.email || '',
+            hours:         apiData.hours || domData.hours || '',
             priceLevel:    domData.priceLevel || '',
             hasDelivery:   domData.hasDelivery || false,
             hasTakeout:    domData.hasTakeout || false,
             hasDineIn:     domData.hasDineIn || false,
-            plusCode:      validIntercepted.plusCode || domData.plusCode || '',
+            plusCode:      apiData.plusCode || domData.plusCode || '',
             googleMapsUrl: card.data.listUrl || domData.googleMapsUrl || window.location.href,
           };
 
@@ -282,9 +288,9 @@
           const hasAddr = merged.address ? '✓' : '-';
           log(`[${pct}] ${merged.name} 📞${hasPhone} 📍${hasAddr}`);
 
-          // Close panel
+          // Close panel and wait for it to fully close
           pressEscape();
-          await sleep(500);
+          await sleep(1000);
 
         } catch (err) {
           log(`[${pct}] ERROR: ${err.message}`);
@@ -455,6 +461,14 @@
     return null;
   }
 
+  function getPanelName() {
+    const panel = getPanel();
+    if (!panel) return null;
+    const h1 = panel.querySelector('h1');
+    if (h1) return h1.textContent?.trim() || null;
+    return null;
+  }
+
   function extractFromPanel(panel) {
     const d = {};
     const allText = panel.innerText || '';
@@ -523,8 +537,8 @@
       }
     }
 
-    // Hours
-    const hoursMatch = allText.match(/(Buka[\s\S]{0,30}pukul[\s\S]{0,20}|Tutup[\s\S]{0,30}pukul[\s\S]{0,20})/i);
+    // Hours - match specific patterns, stop before phone numbers
+    const hoursMatch = allText.match(/(Buka\s*·?\s*Tutup\s+pukul\s+\d{1,2}\.\d{2}|Tutup\s+pukul\s+\d{1,2}\.\d{2})/i);
     if (hoursMatch) d.hours = hoursMatch[1].trim();
 
     // Website
