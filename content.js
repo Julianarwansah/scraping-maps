@@ -93,19 +93,20 @@
       // 2. Scroll feed to load ALL results
       overlay('Loading all results...');
       log('Feed tag: ' + feed.tagName + ', role: ' + feed.getAttribute('role') + ', children: ' + feed.children.length);
-      const allCards = await loadAllCards(feed);
-      log('Total cards loaded: ' + allCards.length);
-      if (allCards.length === 0) {
+      const collectedCards = await loadAllCards(feed);
+      log('Total cards loaded: ' + collectedCards.length);
+      if (collectedCards.length === 0) {
         log('No cards found. Feed HTML (first 500 chars): ' + feed.innerHTML.substring(0, 500));
         fail('Tidak ada hasil ditemukan.');
         return;
       }
 
-      // 3. PASS 1 — collect basic data from every list card (no clicking)
+      // 3. PASS 1 — data already collected during scroll!
       overlay('Pass 1: Reading list cards...');
-      const basics = allCards.map((card, i) => ({
+      const basics = collectedCards.map((c, i) => ({
         idx: i,
-        listData: extractCard(card),
+        listData: c.data,
+        element: c.element,
       }));
       log('Pass 1 done — ' + basics.filter(b => b.listData.name).length + ' names found');
 
@@ -119,19 +120,21 @@
 
       for (let i = 0; i < cardsToScrape.length; i++) {
         const b = cardsToScrape[i];
-        const origIdx = basics.indexOf(b);
         const pct = `${i + 1}/${cardsToScrape.length}`;
         overlay(`Scraping ${pct} — ${b.listData.name || '...'}${scrapeLimits.max > 0 ? ` (max: ${scrapeLimits.max})` : ''}`);
 
         try {
-          // Scroll into view
-          allCards[origIdx].scrollIntoView({ block: 'center', behavior: 'instant' });
-          await sleep(600);
+          // Scroll element into view (if still in DOM)
+          if (b.element && b.element.isConnected) {
+            b.element.scrollIntoView({ block: 'center', behavior: 'instant' });
+            await sleep(600);
+          }
 
           // Click with full event simulation
-          const clicked = robustClick(allCards[origIdx]);
+          const clicked = b.element && b.element.isConnected ? robustClick(b.element) : false;
           if (!clicked) {
-            log(`  [${pct}] SKIP — no click target`);
+            log(`  [${pct}] SKIP — element not in DOM or no click target`);
+            // Still add the basic data we collected during scroll
             results.push(merge(b.listData, {}));
             continue;
           }
@@ -209,8 +212,12 @@
     return null;
   }
 
+  // Store cards data globally so we don't lose them after DOM changes
+  let collectedCards = [];
+
   async function loadAllCards(feed) {
-    const seen = new Set();
+    collectedCards = [];
+    const seenIds = new Set();
     let stable = 0;
     let prev = 0;
 
@@ -225,17 +232,30 @@
       await sleep(1000);
     }
 
+    // Scroll and COLLECT card data during scroll (not after!)
     for (let s = 0; s < CFG.MAX_SCROLLS; s++) {
       const currentCards = queryCards(feed);
-      currentCards.forEach(c => {
-        const id = cardId(c);
-        if (id !== '|') seen.add(id); // Skip cards with no ID
-      });
+
+      // Collect new cards data while they're in the DOM
+      for (const card of currentCards) {
+        const id = cardId(card);
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          // Store the card element AND its extracted data
+          collectedCards.push({
+            element: card,
+            data: extractCard(card),
+            id: id
+          });
+        }
+      }
+
+      log('Scroll ' + (s + 1) + ': ' + currentCards.length + ' visible, ' + collectedCards.length + ' collected');
 
       feed.scrollTop = feed.scrollHeight;
       await sleep(CFG.SCROLL_PAUSE);
 
-      const now = seen.size;
+      const now = seenIds.size;
       if (now === prev) {
         stable++;
         if (stable >= CFG.SCROLL_STABLE) break;
@@ -245,9 +265,8 @@
       prev = now;
     }
 
-    const finalCards = queryCards(feed);
-    log('Scroll complete. Final cards: ' + finalCards.length + ', Unique IDs: ' + seen.size);
-    return finalCards;
+    log('Scroll complete. Total collected: ' + collectedCards.length);
+    return collectedCards;
   }
 
   function queryCards(feed) {
