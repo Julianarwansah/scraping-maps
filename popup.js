@@ -79,6 +79,59 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Column selector ──
   initColumnSelector();
 
+  // ── Radius toggle ──
+  const radiusEnabled = document.getElementById('radiusEnabled');
+  const radiusBody = document.getElementById('radiusBody');
+  const radiusPreview = document.getElementById('radiusPreview');
+  const radiusInput = document.getElementById('radiusInput');
+  const radiusUnit = document.getElementById('radiusUnit');
+  const centerLocation = document.getElementById('centerLocation');
+
+  // Restore radius settings
+  chrome.storage.local.get(['radiusEnabled', 'centerLocation', 'radiusValue', 'radiusUnit'], d => {
+    if (d.radiusEnabled) { radiusEnabled.checked = true; radiusBody.classList.add('active'); }
+    if (d.centerLocation) centerLocation.value = d.centerLocation;
+    if (d.radiusValue) radiusInput.value = d.radiusValue;
+    if (d.radiusUnit) radiusUnit.value = d.radiusUnit;
+    updateRadiusPreview();
+  });
+
+  radiusEnabled.addEventListener('change', () => {
+    radiusBody.classList.toggle('active', radiusEnabled.checked);
+    chrome.storage.local.set({ radiusEnabled: radiusEnabled.checked });
+    updateRadiusPreview();
+  });
+  centerLocation.addEventListener('input', () => {
+    chrome.storage.local.set({ centerLocation: centerLocation.value });
+    updateRadiusPreview();
+  });
+  radiusInput.addEventListener('input', () => {
+    chrome.storage.local.set({ radiusValue: radiusInput.value });
+    updateRadiusPreview();
+  });
+  radiusUnit.addEventListener('change', () => {
+    chrome.storage.local.set({ radiusUnit: radiusUnit.value });
+    updateRadiusPreview();
+  });
+
+  function updateRadiusPreview() {
+    if (!radiusEnabled.checked || !centerLocation.value.trim()) {
+      radiusPreview.textContent = '';
+      return;
+    }
+    const coords = parseCoordinates(centerLocation.value.trim());
+    if (!coords) {
+      radiusPreview.textContent = '⚠️ Format: -6.2088, 106.8456';
+      radiusPreview.style.color = 'var(--danger)';
+      return;
+    }
+    const radius = parseFloat(radiusInput.value) || 5;
+    const unit = radiusUnit.value;
+    const points = generateRadiusPoints(coords.lat, coords.lng, unit === 'mi' ? radius * 1.60934 : radius);
+    radiusPreview.textContent = `📐 ${points.length} titik pencarian dalam radius ${radius} ${unit}`;
+    radiusPreview.style.color = 'var(--accent)';
+  }
+
   // ── Clear history button ──
   document.getElementById('clearHistoryBtn').addEventListener('click', () => {
     chrome.storage.local.remove('scrapeHistory', () => {
@@ -102,7 +155,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const speed = speedSelect.value;
 
-    if (queries.length === 1) {
+    // Check if radius is enabled
+    if (radiusEnabled.checked && centerLocation.value.trim()) {
+      const coords = parseCoordinates(centerLocation.value.trim());
+      if (!coords) {
+        stat.textContent = '⚠️ Format koordinat salah. Gunakan: -6.2088, 106.8456';
+        stat.style.color = 'var(--danger)';
+        resetBtn(btn);
+        return;
+      }
+      const radius = parseFloat(radiusInput.value) || 5;
+      const unit = radiusUnit.value;
+      const radiusKm = unit === 'mi' ? radius * 1.60934 : radius;
+
+      // Warn for large radii
+      if (radiusKm > 20) {
+        stat.textContent = `⚠️ Radius ${radius} ${unit} akan menghasilkan banyak titik. Proses mungkin lama.`;
+        stat.style.color = 'var(--warning)';
+      }
+
+      // Generate radius queries from all keywords
+      const allRadiusQueries = [];
+      for (const q of queries) {
+        const points = generateRadiusPoints(coords.lat, coords.lng, radiusKm, q);
+        allRadiusQueries.push(...points);
+      }
+
+      // Use batch scrape with radius queries
+      startBatchScrape(allRadiusQueries, stat, btn, speed);
+    } else if (queries.length === 1) {
       startScrape(queries[0], stat, btn, speed);
     } else {
       startBatchScrape(queries, stat, btn, speed);
@@ -502,4 +583,76 @@ function getSelectedColumns() {
 function getExportHeaders() {
   const cols = getSelectedColumns();
   return COLUMNS.filter(col => cols.includes(col.key)).map(col => col.label);
+}
+
+// ============================================================
+//  RADIUS / GEO
+// ============================================================
+
+// Parse coordinate string: "-6.2088, 106.8456" or "-6.2088 106.8456"
+function parseCoordinates(str) {
+  // Try comma-separated
+  let parts = str.split(',').map(s => s.trim());
+  if (parts.length === 2) {
+    const lat = parseFloat(parts[0]);
+    const lng = parseFloat(parts[1]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+  // Try space-separated
+  parts = str.split(/\s+/);
+  if (parts.length === 2) {
+    const lat = parseFloat(parts[0]);
+    const lng = parseFloat(parts[1]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+  return null;
+}
+
+// Generate grid points within a circle (in km)
+// Returns array of { lat, lng, query } objects
+function generateRadiusPoints(centerLat, centerLng, radiusKm, keyword) {
+  const EARTH_RADIUS_KM = 6371;
+  const points = [];
+
+  // Step size: ~radius/2 for good overlap
+  const stepKm = Math.max(radiusKm / 2, 0.5);
+  const steps = Math.ceil(radiusKm / stepKm);
+
+  for (let i = -steps; i <= steps; i++) {
+    for (let j = -steps; j <= steps; j++) {
+      const dlatKm = i * stepKm;
+      const dlngKm = j * stepKm;
+
+      // Check if within circle
+      if (Math.sqrt(dlatKm * dlatKm + dlngKm * dlngKm) > radiusKm) continue;
+
+      // Convert km to degrees
+      const dlat = (dlatKm / EARTH_RADIUS_KM) * (180 / Math.PI);
+      const dlng = (dlngKm / (EARTH_RADIUS_KM * Math.cos(centerLat * Math.PI / 180))) * (180 / Math.PI);
+
+      const lat = centerLat + dlat;
+      const lng = centerLng + dlng;
+
+      // Determine zoom level based on radius
+      let zoom;
+      if (radiusKm <= 1) zoom = 15;
+      else if (radiusKm <= 2) zoom = 14;
+      else if (radiusKm <= 5) zoom = 13;
+      else if (radiusKm <= 10) zoom = 12;
+      else if (radiusKm <= 20) zoom = 11;
+      else zoom = 10;
+
+      if (keyword) {
+        points.push(`${keyword}@${lat.toFixed(6)},${lng.toFixed(6)},${zoom}z`);
+      } else {
+        points.push(`@${lat.toFixed(6)},${lng.toFixed(6)},${zoom}z`);
+      }
+    }
+  }
+
+  return points;
 }

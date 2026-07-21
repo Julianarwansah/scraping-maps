@@ -126,6 +126,26 @@
       background: var(--card-bg); font-size: 10px; color: var(--text-secondary); cursor: pointer;
     }
     .col-action-btn:hover { background: var(--hover); }
+
+    .radius-card { padding: 10px 14px; }
+    .radius-toggle { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .radius-toggle label { margin-bottom: 0; cursor: pointer; }
+    .radius-toggle input { accent-color: var(--accent); }
+    .radius-body { display: none; }
+    .radius-body.active { display: block; }
+    .radius-row { display: flex; gap: 10px; align-items: flex-end; }
+    .radius-row .settings-col { flex: 1; }
+    .radius-row .settings-col.radius-size { flex: 0 0 110px; }
+    .radius-input-wrap { display: flex; gap: 4px; }
+    .radius-input-wrap input[type="number"] {
+      width: 55px; padding: 6px 8px; border: 1px solid var(--border);
+      border-radius: 6px; font-size: 12px; background: var(--card-bg); color: var(--text);
+    }
+    .radius-input-wrap select {
+      flex: 1; padding: 6px 4px; border: 1px solid var(--border);
+      border-radius: 6px; font-size: 11px; background: var(--card-bg); color: var(--text); cursor: pointer;
+    }
+    .radius-hint { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -163,6 +183,33 @@
           <option value="aggressive">⚡ Agresif</option>
         </select>
       </div>
+    </div>
+  </div>
+
+  <div class="card radius-card">
+    <div class="radius-toggle">
+      <input type="checkbox" id="radiusEnabled">
+      <label for="radiusEnabled">📍 Aktifkan Radius (pencarian area)</label>
+    </div>
+    <div class="radius-body" id="radiusBody">
+      <div class="radius-row">
+        <div class="settings-col">
+          <label>Lokasi Pusat</label>
+          <input type="text" id="centerLocation" placeholder="-6.2088, 106.8456" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text)">
+          <div class="radius-hint">Koordinat lat, lng (contoh: -6.2088, 106.8456)</div>
+        </div>
+        <div class="settings-col radius-size">
+          <label>Radius</label>
+          <div class="radius-input-wrap">
+            <input type="number" id="radiusInput" min="0.5" max="50" step="0.5" value="5">
+            <select id="radiusUnit">
+              <option value="km">km</option>
+              <option value="mi">miles</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="radius-hint" id="radiusPreview" style="margin-top:6px;color:var(--accent)"></div>
     </div>
   </div>
 

@@ -40,6 +40,23 @@ function notify(title, message) {
   });
 }
 
+// ── Build Google Maps search URL ──
+// Handles both keyword queries and coordinate-based queries (@lat,lng,zoom)
+function buildSearchUrl(query) {
+  // If query contains @ (coordinate-based), split into keyword and coords
+  // Format: "keyword@lat,lng,zoom" or just "@lat,lng,zoom"
+  const atIdx = query.indexOf('@');
+  if (atIdx !== -1) {
+    const keyword = query.substring(0, atIdx);
+    const coords = query.substring(atIdx); // e.g., @-6.2088,106.8456,14z
+    if (keyword) {
+      return `https://www.google.com/maps/search/${encodeURIComponent(keyword)}/${coords}`;
+    }
+    return `https://www.google.com/maps/search/${coords}`;
+  }
+  return `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+}
+
 // ── Cleanup session and related resources ──
 function cleanupSession(tabId) {
   activeSessions.delete('current');
@@ -85,7 +102,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     setBadge('...', '#1a73e8');
 
     chrome.tabs.create(
-      { url: `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}` },
+      { url: buildSearchUrl(searchQuery) },
       (tab) => {
         if (chrome.runtime.lastError) {
           console.error('[BG] Failed to create tab:', chrome.runtime.lastError);
@@ -229,7 +246,7 @@ function startBatchQuery() {
   activeSessions.set('current', { query, startTime: Date.now(), tabId: null });
 
   chrome.tabs.create(
-    { url: `https://www.google.com/maps/search/${encodeURIComponent(query)}` },
+    { url: buildSearchUrl(query) },
     (tab) => {
       if (chrome.runtime.lastError) {
         console.error('[BG] Failed to create batch tab:', chrome.runtime.lastError);
