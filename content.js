@@ -175,7 +175,12 @@
     } catch (err) {
       // Global catch: never leave `running = true`
       log('═══ FATAL ERROR ═══  ' + err.message);
-      fail('Terjadi error: ' + err.message);
+      if (chrome.runtime?.id) {
+        fail('Terjadi error: ' + err.message);
+      } else {
+        running = false;
+        removeOverlay();
+      }
     } finally {
       running = false;
     }
@@ -681,40 +686,58 @@
   function log(msg) { console.log('[MapsScraper] ' + msg); }
 
   function notify(results, warning) {
+    // Check if extension context is still valid
+    if (!chrome.runtime?.id) {
+      log('Extension context invalidated — data saved locally only');
+      return;
+    }
+
     const query = window.__msQuery || '';
 
-    // ALWAYS save to chrome.storage directly (most reliable)
-    chrome.storage.local.set({
-      lastResults: results,
-      lastTime: Date.now()
-    });
-
-    // Save to history directly
-    chrome.storage.local.get(['scrapeHistory'], d => {
-      const history = d.scrapeHistory || [];
-      const storedResults = results.length > 50 ? results.slice(0, 50) : results;
-      history.unshift({
-        id: Date.now(),
-        query: query,
-        count: results.length,
-        timestamp: Date.now(),
-        results: storedResults,
-        truncated: results.length > 50
+    // Save to chrome.storage directly
+    try {
+      chrome.storage.local.set({
+        lastResults: results,
+        lastTime: Date.now()
       });
-      if (history.length > 10) history.length = 10;
-      chrome.storage.local.set({ scrapeHistory: history });
-    });
+    } catch (e) {
+      log('Storage save failed: ' + e.message);
+    }
+
+    // Save to history
+    try {
+      chrome.storage.local.get(['scrapeHistory'], d => {
+        const history = d.scrapeHistory || [];
+        const storedResults = results.length > 50 ? results.slice(0, 50) : results;
+        history.unshift({
+          id: Date.now(),
+          query: query,
+          count: results.length,
+          timestamp: Date.now(),
+          results: storedResults,
+          truncated: results.length > 50
+        });
+        if (history.length > 10) history.length = 10;
+        chrome.storage.local.set({ scrapeHistory: history });
+      });
+    } catch (e) {
+      log('History save failed: ' + e.message);
+    }
 
     log('Saved ' + results.length + ' results to storage + history');
 
-    // Also try to send to background (for popup live update)
-    chrome.runtime.sendMessage({ action: 'scrapeResults', results, query, warning: warning || '' })
-      .catch(e => log('Background notify failed (non-critical): ' + e.message));
+    // Try to send to background (for popup live update)
+    try {
+      chrome.runtime.sendMessage({ action: 'scrapeResults', results, query, warning: warning || '' })
+        .catch(() => {}); // Silently ignore if popup closed
+    } catch (e) {
+      // Extension context invalidated — ignore
+    }
   }
 
   function fail(msg) {
     log('FAIL: ' + msg);
-    notify([]);
+    try { notify([]); } catch (e) {}
     running = false;
     removeOverlay();
   }
