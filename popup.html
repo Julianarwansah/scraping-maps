@@ -1,28 +1,93 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Google Maps Web Scraper</title>
+  <meta charset="UTF-8">
+  <title>Google Maps Scraper</title>
   <script src="xlsx.full.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 420px; padding: 20px; font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; }
+
+    .header { text-align: center; margin-bottom: 16px; }
+    .header h1 { font-size: 18px; color: #1a73e8; }
+    .header p { font-size: 11px; color: #888; margin-top: 2px; }
+
+    .card { background: #fff; border-radius: 10px; padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.08); margin-bottom: 12px; }
+
+    label { display: block; font-size: 12px; font-weight: 600; color: #444; margin-bottom: 6px; }
+
+    input[type="text"] {
+      width: 100%; padding: 10px 14px;
+      border: 2px solid #e0e0e0; border-radius: 8px;
+      font-size: 14px; transition: border-color .2s;
+    }
+    input[type="text"]:focus { outline: none; border-color: #1a73e8; }
+
+    button#scrapeButton {
+      width: 100%; padding: 13px;
+      background: linear-gradient(135deg, #1a73e8, #0d47a1);
+      color: #fff; border: none; border-radius: 8px;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      transition: transform .1s, opacity .2s;
+    }
+    button#scrapeButton:hover { opacity: .92; }
+    button#scrapeButton:active { transform: scale(.98); }
+    button#scrapeButton:disabled { opacity: .45; cursor: not-allowed; }
+
+    #status {
+      margin-top: 12px; font-size: 12px; min-height: 20px;
+      text-align: center; padding: 10px; border-radius: 6px;
+      background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.06);
+      line-height: 1.5;
+    }
+
+    .info { margin-top: 12px; }
+    .info summary { font-size: 11px; font-weight: 600; color: #666; cursor: pointer; padding: 4px 0; }
+    .info-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 3px 12px; margin-top: 8px;
+      font-size: 10px; color: #888; line-height: 1.7;
+    }
+    .info-grid span::before { content: '✓ '; color: #34a853; font-weight: bold; }
+  </style>
 </head>
 <body>
-  <h1>Google Maps Web Scraper</h1>
-  <button id="scrapeButton">Scrape Data</button>
+  <div class="header">
+    <h1>Google Maps Scraper</h1>
+    <p>Scrape data bisnis lengkap dari Google Maps</p>
+  </div>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const scrapeButton = document.getElementById('scrapeButton');
+  <div class="card">
+    <label for="searchQuery">Keyword Pencarian</label>
+    <input type="text" id="searchQuery" placeholder="contoh: sports, restaurant, hotel Bali...">
+  </div>
 
-      if (scrapeButton) {
-        scrapeButton.addEventListener('click', () => {
-          // Call the scraping function here
-          // ...
-          console.log('Scraping data...');
-        });
-      } else {
-        console.error('Scrape button not found');
-      }
-    });
-  </script>
+  <button id="scrapeButton">🔍 Scrape Data</button>
+
+  <div id="status"></div>
+
+  <details class="info card">
+    <summary>Data yang di-scrape (16 kolom)</summary>
+    <div class="info-grid">
+      <span>Business Name</span>
+      <span>Rating</span>
+      <span>Jumlah Review</span>
+      <span>Kategori</span>
+      <span>Nomor Telepon</span>
+      <span>Alamat</span>
+      <span>Website</span>
+      <span>Email</span>
+      <span>Jam Buka</span>
+      <span>Level Harga</span>
+      <span>Delivery</span>
+      <span>Takeout</span>
+      <span>Dine-in</span>
+      <span>Plus Code</span>
+      <span>Google Maps URL</span>
+      <span>Status Bisnis</span>
+    </div>
+  </details>
+
+  <script src="popup.js"></script>
 </body>
 </html>
-

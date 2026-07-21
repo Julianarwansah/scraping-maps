@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Google Maps Web Scraper",
-  "version": "1.0",
+  "name": "Google Maps Scraper Pro",
+  "version": "2.0",
+  "description": "Professional Google Maps scraper — extracts business name, phone, email, website, address, hours, and more",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -15,8 +16,28 @@
     "48": "images/icon48.png",
     "128": "images/icon128.png"
   },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'",
-    "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-eval'; object-src 'self'"
-  }
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.google.com/maps/*",
+    "https://www.google.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.com/maps/*",
+        "https://www.google.com/maps*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }

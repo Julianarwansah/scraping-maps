@@ -1,40 +1,51 @@
 # Google Maps Web Scraper
 
-This project is a web scraping tool designed to extract business information from Google Maps. It allows you to search for specific businesses or locations on Google Maps and collect data such as business name, phone number, and location.
+Chrome extension untuk scraping data bisnis dari Google Maps.
 
-## Features
+## Fitur
 
-- Search for businesses or locations on Google Maps
-- Extract business information including name, phone number, and location
-- Export scraped data to an Excel file (.xlsx)
+- Cari bisnis berdasarkan keyword (contoh: sports, restaurant, hotel)
+- Scrape detail lengkap: nama, rating, review, kategori, telepon, alamat, website, email, jam buka
+- Export otomatis ke file Excel (.xlsx)
+- Visual overlay progress di tab Google Maps
+- Resume: hasil scrape tersimpan otomatis (bisa export meski popup sudah ditutup)
 
-## Installation
+## Data Yang Di-Scrape
 
-1. Clone the repository:
+| Field | Keterangan |
+|---|---|
+| Business Name | Nama bisnis |
+| Rating | Bintang (1-5) |
+| Reviews | Jumlah review |
+| Category | Kategori bisnis |
+| Phone | Nomor telepon |
+| Address | Alamat lengkap |
+| Website | URL website |
+| Email | Email (jika tersedia di listing) |
+| Hours | Jam operasional |
+| Plus Code | Kode lokasi |
+| Google Maps URL | Link Google Maps |
 
-   ```shell
-   git clone https://github.com/beegumfathima/google-maps-web-scraper.git
-   ```
+## Instalasi
 
-2. Open the extension in your preferred code editor.
+1. Buka Chrome, ketik `chrome://extensions` di address bar
+2. Enable **Developer mode** (toggle pojok kanan atas)
+3. Klik **"Load unpacked"**
+4. Pilih folder project ini
+5. Extension akan muncul di toolbar Chrome
 
-3. Load the extension in Chrome:
+## Cara Pakai
 
-   - Open Chrome and navigate to `chrome://extensions`.
-   - Enable Developer Mode using the toggle switch.
-   - Click on "Load unpacked" and select the extension directory.
+1. Klik icon extension di toolbar
+2. Ketik search query (misal: `sports`, `restaurant Jakarta`, `hotel Bali`)
+3. Klik **"Scrape Data"**
+4. Tab baru akan terbuka ke Google Maps
+5. Tunggu scraping selesai (ada overlay progress di tab Maps)
+6. File Excel `.xlsx` akan otomatis ter-download
 
-4. The extension will be added to your Chrome browser.
+## Catatan
 
-## Usage
-
-1. Click on the extension icon in the Chrome toolbar.
-
-2. Enter your search query in the input field and click the "Scrape Data" button.
-
-3. The scraper will extract the desired information from the search results and save it to an Excel file.
-
-## Contributing
-
-Contributions are welcome! If you encounter any issues or have suggestions for improvements, please open an issue or submit a pull request.
-
+- Scraping otomatis klik satu per satu ke detail setiap bisnis
+- Waktu scraping tergantung jumlah hasil (±2-3 detik per bisnis)
+- Google Maps jarang menampilkan email di listing, field email mungkin kosong untuk sebagian besar hasil
+- Hasil scrape tersimpan otomatis selama 10 menit (bisa export ulang dari popup)
