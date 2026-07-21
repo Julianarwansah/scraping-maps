@@ -412,12 +412,21 @@
 
   async function waitForDetail(prevName) {
     const start = Date.now();
+    let panelFound = false;
 
     while (Date.now() - start < CFG.PANEL_TIMEOUT) {
       await sleep(CFG.PANEL_POLL);
 
       const panel = getPanel();
-      if (!panel) continue;
+      if (!panel) {
+        if (!panelFound) log('Waiting for panel... (no panel found)');
+        continue;
+      }
+
+      if (!panelFound) {
+        panelFound = true;
+        log('Panel found: role=' + panel.getAttribute('role') + ' tag=' + panel.tagName + ' text=' + (panel.innerText || '').substring(0, 100));
+      }
 
       const name = extractPanelName(panel);
       if (!name) continue;
@@ -426,15 +435,35 @@
         continue;
       }
 
+      log('Panel name: ' + name + ' (prev: ' + prevName + ')');
       return extractAll(panel);
     }
 
     const panel = getPanel();
-    return panel ? extractAll(panel) : emptyData();
+    if (panel) {
+      log('Panel timeout but found, extracting anyway');
+      return extractAll(panel);
+    }
+    log('Panel NOT found after timeout');
+    return emptyData();
   }
 
   function getPanel() {
-    return document.querySelector('[role="main"]') || document.querySelector('[role="complementary"]');
+    // Try multiple selectors for the detail panel
+    const selectors = [
+      '[role="main"]',
+      '[role="complementary"]',
+      '.m6QErb.DxyBCb.kA9KIf.dS8AEf',  // Common Google Maps panel class
+      '.m6QErb',  // Broader class match
+      '[data-panel]',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.innerText && el.innerText.length > 50) {
+        return el;
+      }
+    }
+    return null;
   }
 
   function extractPanelName(panel) {
@@ -474,6 +503,7 @@
 
     // ── Get ALL text from panel for scanning ──
     const allText = panel.innerText || '';
+    log('Panel text (first 300): ' + allText.substring(0, 300));
 
     // ── Rating ──
     const starImg = panel.querySelector('span[role="img"]');
@@ -601,6 +631,7 @@
       if (pcMatch) d.plusCode = pcMatch[1];
     }
 
+    log('Extracted: name=' + d.name + ' rating=' + d.rating + ' phone=' + d.phone + ' addr=' + (d.address || '').substring(0, 50) + ' reviews=' + d.reviews + ' hours=' + (d.hours || '').substring(0, 30));
     return d;
   }
 
