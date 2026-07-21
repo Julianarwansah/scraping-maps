@@ -653,16 +653,23 @@
   }
 
   function cleanPhone(el, ariaLabel, text) {
-    if (ariaLabel) {
-      let c = ariaLabel;
-      for (const kw of L.phone) c = c.replace(new RegExp(kw, 'gi'), '');
-      c = c.replace(/^[\s:]+/, '').replace(/[\s:]+$/, '').trim();
-      if (c.length >= 8) return c;
+    try {
+      if (ariaLabel) {
+        let c = ariaLabel;
+        const phoneKeywords = L.phone || ['phone','telepon','telp'];
+        for (const kw of phoneKeywords) {
+          c = c.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+        }
+        c = c.replace(/^[\s:]+/, '').replace(/[\s:]+$/, '').trim();
+        if (c.length >= 8) return c;
+      }
+      const m = text.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
+      if (m) return m[1].trim();
+      if (text.length >= 8 && text.length <= 20 && /^[\d\s\-+()]+$/.test(text)) return text;
+    } catch (e) {
+      log('cleanPhone error: ' + e.message);
     }
-    const m = text.match(/(\+?62[\d\s\-]{8,15}|0[\d][\d\s\-]{7,14})/);
-    if (m) return m[1].trim();
-    if (text.length >= 8 && text.length <= 20 && /^[\d\s\-+()]+$/.test(text)) return text;
-    return text;
+    return text || '';
   }
 
   function pressEscape() {
