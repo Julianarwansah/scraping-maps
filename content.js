@@ -34,12 +34,25 @@
     dinein:  ['dine-in','makan di tempat'],
   };
 
+  // ── Speed presets ──────────────────────────────────────────
+  const SPEED_PRESETS = {
+    slow:       { CLICK_SETTLE: 6000, BETWEEN_ITEMS: 2500, SCROLL_PAUSE: 1800 },
+    normal:     { CLICK_SETTLE: 4500, BETWEEN_ITEMS: 1500, SCROLL_PAUSE: 1200 },
+    fast:       { CLICK_SETTLE: 3000, BETWEEN_ITEMS: 800,  SCROLL_PAUSE: 800  },
+    aggressive: { CLICK_SETTLE: 2000, BETWEEN_ITEMS: 500,  SCROLL_PAUSE: 500  },
+  };
+
   // ── State ───────────────────────────────────────────────────
   let running = false;
 
   chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     if (msg.action === 'startScraping' && !running) {
       running = true;
+      window.__msQuery = msg.query || '';
+      // Apply speed preset
+      const speed = msg.speed || 'normal';
+      const preset = SPEED_PRESETS[speed] || SPEED_PRESETS.normal;
+      Object.assign(CFG, preset);
       reply({ status: 'started' });
       setTimeout(() => main(msg.query || ''), 1500);
     }
@@ -544,7 +557,7 @@
   function log(msg) { console.log('[MapsScraper] ' + msg); }
 
   function notify(results) {
-    chrome.runtime.sendMessage({ action: 'scrapeResults', results })
+    chrome.runtime.sendMessage({ action: 'scrapeResults', results, query: window.__msQuery || '' })
       .catch(e => log('notify failed: ' + e.message));
   }
 
